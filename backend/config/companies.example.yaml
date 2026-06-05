@@ -1,0 +1,13 @@
+companies:
+- name: Example Co
+  slug: example-co
+  segment: observability          # your own bucket/category for this company
+  headcount_band: 500-5000
+  greenhouse_slug: exampleco      # ATS board slug, or null if not on Greenhouse
+  lever_slug: null
+  workday_url: null
+  ashby_slug: null
+  smartrecruiters_slug: null
+  has_canada_team: true
+  enabled: true
+  notes: Why this company is a fit for you.

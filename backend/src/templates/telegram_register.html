@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Telegram setup — Elevator{% endblock %}
+{% block content %}
+<header class="pageheader">
+    <h1>Telegram setup</h1>
+    <p class="muted">
+        Register the chat that gets batch-ready pings. One-time setup.
+    </p>
+</header>
+
+{% if current_chat_id %}
+<div class="saved" role="status">Currently registered: chat id <code>{{ current_chat_id }}</code></div>
+{% endif %}
+
+{% if status %}
+<div class="error" style="background: rgba(67,181,129,0.08); color: var(--text); border: 1px solid var(--border); padding: 10px;">
+    {{ status }}
+    {% if registered_chat_id %}— new chat id: <code>{{ registered_chat_id }}</code>{% endif %}
+</div>
+{% endif %}
+
+<section class="section">
+    <div class="sectionhead"><h2>Setup steps</h2></div>
+    <ol>
+        <li>Open Telegram on your phone.</li>
+        <li>Find the bot @BotFather gave you at setup (search its username).</li>
+        <li>Send <code>/start</code> to it.</li>
+        <li>Click <strong>Register</strong> below — we'll grab the chat id from getUpdates and remember it.</li>
+    </ol>
+    <form method="post" action="{{ root_path }}/telegram/register">
+        <div class="actions">
+            <button type="submit">Register chat</button>
+        </div>
+    </form>
+</section>
+
+{% if current_chat_id %}
+<section class="section">
+    <div class="sectionhead"><h2>Test ping</h2></div>
+    <p class="blurb">Sends a "test ping" message to the registered chat to confirm end-to-end works.</p>
+    <form method="post" action="{{ root_path }}/telegram/test">
+        <div class="actions">
+            <button type="submit">Send test ping</button>
+        </div>
+    </form>
+</section>
+{% endif %}
+{% endblock %}

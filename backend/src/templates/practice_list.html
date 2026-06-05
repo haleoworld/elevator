@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Practice — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Coaching','/coaching'), ('Practice','/practice')] %}
+{% set subtab_active = '/practice' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Practice</h1>
+    <p class="muted">
+        Core questions only — each one folds in the different ways it gets asked.
+        Drill the cores deeply; tap “also asked as” to see the phrasings to
+        recognize in the room.
+    </p>
+</header>
+
+{% for cat in ['behavioral', 'technical', 'system_design', 'fe_specific', 'personal'] %}
+{% set cat_qs = cores|selectattr('category','equalto',cat)|list %}
+{% if cat_qs %}
+<section class="section">
+    <div class="sectionhead"><h2>{{ cat.replace('_', ' ').title() }} ({{ cat_qs|length }})</h2></div>
+    <ul class="core-list">
+        {% for q in cat_qs %}
+        <li class="core-item">
+            <a class="core-link" href="{{ root_path }}/practice/{{ q.id }}">
+                <span class="core-q">{{ q.question }}</span>
+                <span class="core-meta">{{ q.attempt_count or 0 }} attempt{{ '' if q.attempt_count == 1 else 's' }}{% if q.last_attempt %} · last {{ q.last_attempt[:10] }}{% endif %}</span>
+            </a>
+            {% if q.variants %}
+            <details class="variant-box">
+                <summary>also asked as ({{ q.variants|length }})</summary>
+                <ul class="variant-list">
+                    {% for v in q.variants %}
+                    <li>{{ v.question }}</li>
+                    {% endfor %}
+                </ul>
+            </details>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endif %}
+{% endfor %}
+{% endblock %}

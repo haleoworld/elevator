@@ -1,0 +1,16 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+jinja2>=3.1
+python-multipart>=0.0.9
+python-dotenv>=1.0
+cryptography>=42.0
+passlib[argon2]>=1.7.4
+itsdangerous>=2.1
+httpx>=0.27
+anthropic>=0.34
+pyyaml>=6.0
+mlx-whisper>=0.4
+
+# Needed on Python <3.10 so FastAPI/pydantic can evaluate `str | None`
+# annotations at import time. No-op (and not installed) on 3.10+.
+eval_type_backport>=0.2 ; python_version < "3.10"

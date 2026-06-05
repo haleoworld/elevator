@@ -1,0 +1,40 @@
+# OS
+.DS_Store
+**/.DS_Store
+
+# Secrets — never commit
+**/.env
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+
+# Local data & artifacts (DB, audio, transcripts, reports, backups)
+**/*.db
+**/*.db-journal
+**/data/audio/
+**/data/transcripts/
+**/data/coaching-reports/
+**/data/backups/
+
+# Runtime PID files
+**/*.pid
+
+# Personal config — kept local-only; see the *.example templates in config/
+**/config/profile.md
+**/config/companies.yaml
+
+# Logs & models (large / machine-local)
+**/logs/
+**/models/
+
+# Local edit-backup snapshots (git history supersedes these)
+**/*.bak
+**/*.bak-*
+
+# Frontend (future)
+**/node_modules/
+**/dist/
+**/build/

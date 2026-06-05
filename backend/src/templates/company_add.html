@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Add company — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Profile','/profile'), ('Companies','/companies')] %}
+{% set subtab_active = '/companies' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Add company</h1>
+    <p class="muted">
+        <a href="{{ root_path }}/companies">← Back to companies</a> ·
+        Required: Name + Slug. Headcount band must match one of the allowed values.
+    </p>
+</header>
+
+{% if errors %}
+<div class="error">
+    {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+</div>
+{% endif %}
+
+<section class="section">
+    {% include "_company_form.html" %}
+</section>
+{% endblock %}

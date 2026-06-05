@@ -1,0 +1,403 @@
+{% extends "base.html" %}
+{% block title %}Jobs — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Jobs','/jobs'), ('Batches','/batches')] %}
+{% set subtab_active = '/jobs' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Jobs</h1>
+    <p class="muted">
+        Phase 3 cost so far: <strong>${{ "%.4f"|format(screen_cost_usd) }}</strong> over {{ screen_calls }} Haiku calls.
+        {% if purged_n %} · Auto-purged {{ purged_n }} jobs deleted &gt;5d ago.{% endif %}
+    </p>
+</header>
+
+{% for d in [discovery_status, screen_status] if d %}
+<section class="section discovery-banner {% if d.running %}is-running{% else %}is-done{% endif %}">
+    <div class="sectionhead">
+        <h2>
+            {% if d.running %}{{ icon('refresh') }} {{ d.label }} running…
+            {% else %}{{ icon('check') }} {{ d.label }} finished
+            {% endif %}
+        </h2>
+    </div>
+    <p class="blurb">
+        {% if d.running %}
+            Started {{ d.elapsed_s // 60 }}m {{ d.elapsed_s % 60 }}s ago ·
+            last activity {{ d.since_last_activity_s }}s ago
+        {% else %}
+            Done {{ d.since_last_activity_s // 60 }}m {{ d.since_last_activity_s % 60 }}s ago
+        {% endif %}
+        · {{ icon('refresh') }} refresh to update
+    </p>
+    {% if d.tail %}
+    <pre class="discovery-log">{% for ln in d.tail %}{{ ln }}
+{% endfor %}</pre>
+    {% endif %}
+</section>
+{% endfor %}
+
+<section class="section">
+    <div class="sectionhead"><h2>Add jobs</h2></div>
+    <div class="input-mode-tabs" role="tablist">
+        <button type="button" class="input-mode-btn active" data-mode="discovery" role="tab">{{ icon('search') }} Discovery</button>
+        <button type="button" class="input-mode-btn" data-mode="screen" role="tab">{{ icon('sparkles') }} Discovery + LLM ($)</button>
+        <button type="button" class="input-mode-btn" data-mode="screen-only" role="tab">{{ icon('sparkles') }} Score Passed ($)</button>
+        <button type="button" class="input-mode-btn" data-mode="paste" role="tab">{{ icon('pencil') }} Paste manually</button>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="discovery">
+        <p class="blurb">
+            Free. Pulls from Adzuna + Greenhouse + Lever + Workday + Ashby + SmartRecruiters across enabled companies.
+            Phase 2 keyword filter runs but no LLM scoring. Runs in the background; refresh in ~5 min.
+        </p>
+        <form method="post" action="{{ root_path }}/jobs/run-discovery">
+            <div class="actions"><button type="submit">Run discovery</button></div>
+        </form>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="screen" hidden>
+        <p class="blurb">
+            Costs $1–3 depending on volume. Same discovery as above, then Haiku scores every job that passes Phase 2.
+            Use when you want new scored results ready in the Scored tab.
+        </p>
+        <form method="post" action="{{ root_path }}/jobs/run-discovery"
+              onsubmit="return confirm('Run full pipeline including Phase 3 LLM screen? Estimated cost: $1-3.');">
+            <input type="hidden" name="include_screen" value="yes">
+            <div class="actions"><button type="submit">Run discovery + LLM screen</button></div>
+        </form>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="screen-only" hidden>
+        <p class="blurb">
+            Skip discovery — just LLM-score every job currently in the Passed tab.
+            Use this when you've already run Discovery (free) and want to pay for scoring
+            only on the survivors. Cost: ~$0.01-0.02 per job in Passed.
+        </p>
+        <form method="post" action="{{ root_path }}/jobs/run-screen"
+              onsubmit="return confirm('Run LLM screen on every job currently in Passed ({{ totals.passed_unscored }} jobs)? Approx cost: $' + ({{ totals.passed_unscored }} * 0.015).toFixed(2) + '.');">
+            <div class="actions">
+                <button type="submit"{% if totals.passed_unscored == 0 %} disabled{% endif %}>
+                    Score {{ totals.passed_unscored }} Passed jobs
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="paste" hidden>
+        <p class="blurb">
+            Found a job somewhere our scrapers don't reach? Paste it in directly — bypasses the curated company filter
+            and the Phase 2 keyword filter, goes straight to LLM scoring.
+        </p>
+        <div class="actions">
+            <a href="{{ root_path }}/jobs/paste" class="secondary-btn">Open paste form →</a>
+        </div>
+    </div>
+</section>
+<script>
+(function () {
+    const tabs = document.querySelectorAll('.input-mode-btn');
+    const last = localStorage.getItem('jobs_action_mode') || 'discovery';
+    function show(mode) {
+        tabs.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+        document.querySelectorAll('[data-mode-panel]').forEach(p => {
+            p.hidden = (p.dataset.modePanel !== mode);
+        });
+        localStorage.setItem('jobs_action_mode', mode);
+    }
+    tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.mode)));
+    show(last);
+})();
+</script>
+
+<section class="section">
+    <form method="post" action="{{ root_path }}/jobs/delete-all"
+          onsubmit="return confirm('Soft-delete ALL {{ (totals.scored + totals.passed_unscored + totals.dropped) }} jobs across every tab? They go to Deleted and auto-purge after 5 days.');">
+        <button type="submit" class="secondary-btn">{{ icon('trash') }} Delete all jobs</button>
+    </form>
+</section>
+
+<nav class="tabbar" aria-label="Jobs tabs">
+    <a class="tab {% if tab == 'scored' %}active{% endif %}" href="{{ root_path }}/jobs?tab=scored">
+        Scored <span class="tab-count">{{ totals.scored }}</span>
+    </a>
+    <a class="tab {% if tab == 'passed' %}active{% endif %}" href="{{ root_path }}/jobs?tab=passed">
+        Passed <span class="tab-count">{{ totals.passed_unscored }}</span>
+    </a>
+    <a class="tab {% if tab == 'dropped' %}active{% endif %}" href="{{ root_path }}/jobs?tab=dropped">
+        Dropped <span class="tab-count">{{ totals.dropped }}</span>
+    </a>
+    <a class="tab {% if tab == 'batched' %}active{% endif %}" href="{{ root_path }}/jobs?tab=batched">
+        Batched <span class="tab-count">{{ totals.batched }}</span>
+    </a>
+    <a class="tab {% if tab == 'deleted' %}active{% endif %}" href="{{ root_path }}/jobs?tab=deleted">
+        Deleted <span class="tab-count">{{ totals.deleted }}</span>
+    </a>
+</nav>
+
+{% macro select_all() %}
+<label style="font-size: 14px; display: inline-block; margin-bottom: 8px;">
+    <input type="checkbox" onclick="this.closest('form').querySelectorAll('input[name=job_ids]').forEach(cb=>cb.checked=this.checked)">
+    Select all
+</label>
+{% endmacro %}
+
+{% macro filter_form(tab) %}
+<form method="get" action="{{ root_path }}/jobs" class="company-form" style="margin-bottom: 14px;">
+    <input type="hidden" name="tab" value="{{ tab }}">
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <label style="flex: 1 1 160px;">Company contains
+            <input type="text" name="q_company" value="{{ q_company }}" placeholder="e.g. grafana">
+        </label>
+        <label style="flex: 1 1 160px;">Location contains
+            <input type="text" name="q_location" value="{{ q_location }}" placeholder="e.g. toronto, remote, canada">
+        </label>
+        <label style="flex: 1 1 160px;">Drop reason
+            <select name="q_reason">
+                <option value="">— any —</option>
+                {% for r in drop_reasons %}
+                <option value="{{ r }}" {% if r == q_reason %}selected{% endif %}>{{ r }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label style="flex: 1 1 150px;">Fit tier
+            <select name="q_min_fit">
+                <option value=""           {% if q_min_fit == ''           %}selected{% endif %}>— any —</option>
+                <option value="apply"      {% if q_min_fit == 'apply'      %}selected{% endif %}>Apply (70+)</option>
+                <option value="transition" {% if q_min_fit == 'transition' %}selected{% endif %}>Transition (66–69)</option>
+                <option value="practice"   {% if q_min_fit == 'practice'   %}selected{% endif %}>Practice (40–65)</option>
+                <option value="drop"       {% if q_min_fit == 'drop'       %}selected{% endif %}>Drop (&lt; 40)</option>
+                <option value="no_score"   {% if q_min_fit == 'no_score'   %}selected{% endif %}>No score</option>
+            </select>
+        </label>
+        <label style="flex: 1 1 130px;">Min ATS %
+            <select name="q_min_ats">
+                <option value=""         {% if q_min_ats == ''         %}selected{% endif %}>— any —</option>
+                <option value="no_score" {% if q_min_ats == 'no_score' %}selected{% endif %}>No score</option>
+                {% for n in [10,20,30,40,50,60,70,80,90] %}
+                <option value="{{ n }}" {% if q_min_ats == n|string %}selected{% endif %}>{{ n }}+</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label style="flex: 1 1 130px;">FE role?
+            <select name="q_fe">
+                <option value=""    {% if q_fe == ''    %}selected{% endif %}>— any —</option>
+                <option value="yes" {% if q_fe == 'yes' %}selected{% endif %}>FE only</option>
+                <option value="no"  {% if q_fe == 'no'  %}selected{% endif %}>Non-FE only</option>
+            </select>
+        </label>
+    </div>
+    <div class="actions" style="margin-top: 10px;">
+        <button type="submit">Filter</button>
+        {% if q_company or q_reason or q_min_fit or q_min_ats or q_fe %}
+        <a href="{{ root_path }}/jobs?tab={{ tab }}" class="secondary-btn" style="margin-left: 8px;">Clear</a>
+        {% endif %}
+    </div>
+</form>
+{% endmacro %}
+
+{% macro job_table_head(extra_col_label=None, show_batch=False) %}
+<thead><tr>
+    <th></th><th>#</th><th>FE</th><th>FE%</th><th>Fit</th><th>Role fit</th><th>Co fit</th><th>ATS</th><th>Company</th><th>Title</th><th>Location</th><th>Reason</th>
+    {% if show_batch %}<th>Batch</th>{% endif %}
+    <th>Posted</th><th>Discovered</th><th>Board</th>
+    {% if extra_col_label %}<th>{{ extra_col_label }}</th>{% endif %}
+</tr></thead>
+{% endmacro %}
+
+{% macro job_row(j, extra_cell=None, show_batch=False) %}
+<tr data-href="{{ root_path }}/jobs/{{ j.id }}">
+    <td><input type="checkbox" name="job_ids" value="{{ j.id }}"></td>
+    <td>{{ j.id }}</td>
+    <td>{% if j.is_frontend == 1 %}<span class="badge status-ok">FE</span>{% elif j.is_frontend == 0 %}<span class="badge status-fail">non-FE</span>{% else %}—{% endif %}</td>
+    <td>{% if j.fe_share is not none %}{{ j.fe_share }}%{% else %}—{% endif %}</td>
+    <td>{% if j.fit_score is not none %}<span class="fit-pill {{ j.score_class }}">{{ j.fit_score }}</span>{% else %}—{% endif %}</td>
+    <td>{% if j.role_fit is not none %}<span class="fit-pill {{ j.role_fit_class }}">{{ j.role_fit }}</span>{% else %}—{% endif %}</td>
+    <td>{% if j.company_fit is not none %}<span class="fit-pill {{ j.company_fit_class }}">{{ j.company_fit }}</span>{% else %}—{% endif %}</td>
+    <td>{% if j.ats_score is not none %}{{ j.ats_score }}%{% else %}—{% endif %}</td>
+    <td>{{ j.company }}</td>
+    <td class="title-cell">{{ j.title }}</td>
+    <td>{{ j.location or "—" }}</td>
+    <td>{{ j.drop_reason or "—" }}</td>
+    {% if show_batch %}<td>{% if j.batch_id %}<a href="{{ root_path }}/batches/{{ j.batch_id }}" onclick="event.stopPropagation()">{{ j.batch_name or ("#" ~ j.batch_id) }}</a>{% else %}—{% endif %}</td>{% endif %}
+    <td class="detail">{% if j.posted_at %}{{ j.posted_at|string|truncate(10, true, '') }}{% else %}—{% endif %}</td>
+    <td class="detail">{% if j.discovered_at %}{{ j.discovered_at|string|truncate(10, true, '') }}{% else %}—{% endif %}</td>
+    <td>{{ j.job_board or "—" }}</td>
+    {% if extra_cell is not none %}<td>{{ extra_cell }}</td>{% endif %}
+</tr>
+{% endmacro %}
+
+{% set has_filter = q_company or q_reason or q_min_fit or q_min_ats or q_fe or q_location %}
+
+{% macro action_buttons(tab, kind) %}
+{# Each button carries its OWN confirm via onclick. The parent <form> must NOT
+   have an onsubmit handler — that would fire for every button regardless of
+   its formaction (the bug where 'Add to batch' triggered the soft-delete
+   confirm). formaction only changes the POST url, not onsubmit. #}
+<input type="hidden" name="tab" value="{{ tab }}">
+
+{# Row 1 — batch controls (scored only): the everyday action, gets its own row #}
+{% if tab == 'scored' %}
+<div class="action-bar batch-add-controls">
+    <select name="batch_target" onchange="this.closest('.batch-add-controls').querySelector('.new-batch-name').hidden = (this.value !== 'new');">
+        <option value="new">＋ New batch…</option>
+        {% for b in batch_options %}
+        <option value="{{ b.id }}">#{{ b.id }}{% if b.name %} · {{ b.name }}{% endif %} ({{ b.job_count or 0 }})</option>
+        {% endfor %}
+    </select>
+    <input type="text" name="batch_name" class="new-batch-name" maxlength="80" placeholder="name (optional)">
+    <button type="submit" formaction="{{ root_path }}/jobs/add-to-batch" formnovalidate>
+        {{ icon('check') }} Add to batch
+    </button>
+</div>
+{% endif %}
+
+{# Row 2 — secondary / destructive actions #}
+<div class="action-bar">
+    {% if kind == 'deleted' %}
+    <button type="submit" class="secondary-btn">{{ icon('undo') }} Restore</button>
+    {% else %}
+    <button type="submit" class="secondary-btn"
+            onclick="return confirm('Soft-delete selected jobs? They go to Deleted and auto-purge after 5 days.');">
+        {{ icon('trash') }} Delete
+    </button>
+    {% endif %}
+    {% if tab == 'scored' %}
+    <button type="submit" class="secondary-btn"
+            formaction="{{ root_path }}/jobs/bulk-rescreen" formnovalidate
+            onclick="return confirm('Re-screen selected jobs with the current LLM tool? They go back to Passed and Phase 3 re-runs in the background (~$0.013 per job).');">
+        {{ icon('sparkles') }} Re-screen
+    </button>
+    {% endif %}
+    <button type="submit" class="secondary-btn danger-btn"
+            formaction="{{ root_path }}/jobs/bulk-delete-permanent" formnovalidate
+            onclick="return confirm('Permanently delete selected jobs? This cannot be undone.');">
+        {{ icon('warning') }} Delete permanently
+    </button>
+</div>
+{% endmacro %}
+
+{% if tab == 'scored' %}
+<section class="section">
+    <div class="sectionhead"><h2>Scored ({{ scored|length }}{% if has_filter %} matching{% endif %})</h2></div>
+    <p class="blurb">Sorted by fit_score. Tap any row to open.</p>
+    {{ filter_form('scored') }}
+    {% if scored %}
+    <form method="post" action="{{ root_path }}/jobs/bulk-delete">
+        {{ select_all() }}
+        {{ action_buttons('scored', 'active') }}
+        <div class="table-scroll">
+        <table class="healthtable jobs-table">
+            {{ job_table_head() }}
+            <tbody>
+            {% for j in scored %}{{ job_row(j) }}{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted">{% if has_filter %}No scored jobs match.{% else %}Nothing scored yet. Run discovery + LLM screen to populate.{% endif %}</p>
+    {% endif %}
+</section>
+{% endif %}
+
+{% if tab == 'passed' %}
+<section class="section">
+    <div class="sectionhead"><h2>Passed Phase 2, not yet scored ({{ passed_not_scored|length }}{% if has_filter %} matching{% endif %})</h2></div>
+    {{ filter_form('passed') }}
+    {% if passed_not_scored %}
+    <form method="post" action="{{ root_path }}/jobs/bulk-delete">
+        {{ select_all() }}
+        {{ action_buttons('passed', 'active') }}
+        <div class="table-scroll">
+        <table class="healthtable jobs-table">
+            {{ job_table_head() }}
+            <tbody>
+            {% for j in passed_not_scored %}{{ job_row(j) }}{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted">{% if has_filter %}No passed jobs match.{% else %}No unscored passes. Either all scored, or filter dropped everything.{% endif %}</p>
+    {% endif %}
+</section>
+{% endif %}
+
+{% if tab == 'dropped' %}
+<section class="section">
+    <div class="sectionhead"><h2>Dropped Phase 2 ({{ dropped_jobs|length }}{% if has_filter %} matching{% endif %})</h2></div>
+    {{ filter_form('dropped') }}
+    {% if dropped_jobs %}
+    <form method="post" action="{{ root_path }}/jobs/bulk-delete">
+        {{ select_all() }}
+        {{ action_buttons('dropped', 'active') }}
+        <div class="table-scroll">
+        <table class="healthtable jobs-table">
+            {{ job_table_head() }}
+            <tbody>
+            {% for j in dropped_jobs %}{{ job_row(j) }}{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted">No dropped jobs match.</p>
+    {% endif %}
+</section>
+{% endif %}
+
+{% if tab == 'batched' %}
+<section class="section">
+    <div class="sectionhead"><h2>Batched ({{ batched_jobs|length }}{% if has_filter %} matching{% endif %})</h2></div>
+    <p class="blurb">Jobs added to a batch. Tap a row to open the job, or the Batch link to open the batch. Delete to soft-remove (also frees the job from its batch).</p>
+    {{ filter_form('batched') }}
+    {% if batched_jobs %}
+    <form method="post" action="{{ root_path }}/jobs/bulk-delete">
+        {{ select_all() }}
+        <div class="action-bar">
+            <button type="submit" class="secondary-btn"
+                    onclick="return confirm('Soft-delete selected batched jobs? They leave their batch and go to Deleted.');">
+                {{ icon('trash') }} Delete
+            </button>
+            <input type="hidden" name="tab" value="batched">
+        </div>
+        <div class="table-scroll">
+        <table class="healthtable jobs-table">
+            {{ job_table_head(show_batch=True) }}
+            <tbody>
+            {% for j in batched_jobs %}{{ job_row(j, show_batch=True) }}{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted">No batched jobs{% if has_filter %} match{% endif %}. Add scored jobs to a batch from the Scored tab.</p>
+    {% endif %}
+</section>
+{% endif %}
+
+{% if tab == 'deleted' %}
+<section class="section">
+    <div class="sectionhead"><h2>Deleted ({{ deleted_jobs|length }}{% if has_filter %} matching{% endif %})</h2></div>
+    <p class="blurb">Soft-deleted jobs. Auto-purged 5 days after deletion. Restore brings them back to their previous tab.</p>
+    {{ filter_form('deleted') }}
+    {% if deleted_jobs %}
+    <form method="post" action="{{ root_path }}/jobs/bulk-restore">
+        {{ select_all() }}
+        {{ action_buttons('deleted', 'deleted') }}
+        <div class="table-scroll">
+        <table class="healthtable jobs-table">
+            {{ job_table_head('Deleted at') }}
+            <tbody>
+            {% for j in deleted_jobs %}{{ job_row(j, j.deleted_at) }}{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted">Nothing in the trash.</p>
+    {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title %}Coaching — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Coaching','/coaching'), ('Practice','/practice')] %}
+{% set subtab_active = '/coaching' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Coaching</h1>
+    <p class="muted">
+        Upload interview audio for analysis. Audio stays on the Mac mini — only
+        the transcript text is sent to the LLM.
+    </p>
+</header>
+
+<section class="section">
+    <div class="sectionhead"><h2>New interview analysis</h2></div>
+
+    {# ───────── STEP 1 — interview details ───────── #}
+    <div id="wiz-step1" class="company-form">
+        <p class="blurb" style="margin-bottom: 10px;">
+            <strong>Step 1.</strong> Describe the interview (type or 🎙️ record), tap ✦ to auto-fill, or type the fields directly.
+        </p>
+
+        <label>Describe the interview (optional)
+            <div class="desc-field record-controls">
+                <textarea id="wiz-desc" rows="2" placeholder="e.g. Interview with Veeva yesterday for the phone screen round."></textarea>
+                <div class="desc-actions" data-rec-state="idle">
+                    <button type="button" class="iconbtn" id="wiz-parse-btn" onclick="parseFromText()" title="Auto-fill fields from text">{{ icon('sparkles') }} Fill</button>
+                    <button type="button" class="iconbtn" onclick="recStart('rec-desc', '')" title="Record a spoken description">{{ icon('record') }} Rec</button>
+                </div>
+                <div data-rec-state="recording" hidden class="desc-rec-row">
+                    <button type="button" class="record-stop-btn" onclick="recStop('rec-desc')">{{ icon('stop') }} Stop</button>
+                    <span class="rec-timer-display"><span class="rec-dot">●</span> <span data-rec-timer>0:00</span></span>
+                </div>
+                <div data-rec-state="recorded" hidden class="desc-rec-row">
+                    <audio data-rec-preview controls style="width: 100%; margin: 6px 0;"></audio>
+                    <div class="actions">
+                        <button type="button" onclick="parseFromAudio()">{{ icon('sparkles') }} Transcribe &amp; fill</button>
+                        <button type="button" class="secondary-btn" onclick="recReset('rec-desc')">Re-record</button>
+                    </div>
+                </div>
+                <div data-rec-state="error" hidden><p class="error" data-rec-error></p></div>
+            </div>
+        </label>
+
+        <div class="formrow-3">
+            <label>Company
+                <input type="text" id="wiz-company" maxlength="120" placeholder="Veeva">
+            </label>
+            <label>Date
+                <input type="text" id="wiz-date" maxlength="20" placeholder="YYYY-MM-DD">
+            </label>
+            <label>Round
+                <input type="text" id="wiz-round" placeholder="hiring-manager">
+            </label>
+        </div>
+
+        <div class="actions" style="margin-top: 4px;">
+            <button type="button" onclick="document.getElementById('wiz-step1').hidden=true; document.getElementById('wiz-step2').hidden=false;">
+                Step 2 →
+            </button>
+        </div>
+    </div>
+
+    {# ───────── STEP 2 — submit the interview recording ───────── #}
+    <div id="wiz-step2" hidden>
+        <p class="blurb">
+            <strong>Step 2 — the interview recording.</strong>
+            <a href="#" onclick="event.preventDefault(); document.getElementById('wiz-step2').hidden=true; document.getElementById('wiz-step1').hidden=false;">← back to details</a>
+        </p>
+        <div class="input-mode-tabs" role="tablist">
+            <button type="button" class="input-mode-btn active" data-mode="audio" role="tab">{{ icon('mic') }} Upload</button>
+            <button type="button" class="input-mode-btn" data-mode="record" role="tab">{{ icon('record') }} Record</button>
+            <button type="button" class="input-mode-btn" data-mode="text" role="tab">{{ icon('pencil') }} Paste</button>
+        </div>
+
+        <div class="input-mode-panel" data-mode-panel="audio">
+            <p class="blurb">Upload an audio file (Voice Memos export, etc.). Whisper transcribes locally, then Sonnet writes a coaching report.</p>
+            <form method="post" action="{{ root_path }}/coaching/upload" enctype="multipart/form-data" class="company-form" onsubmit="syncMeta(this)">
+                <input type="hidden" name="company"><input type="hidden" name="interview_date"><input type="hidden" name="round">
+                <label>Audio file
+                    <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.aiff" required>
+                </label>
+                <div class="actions"><button type="submit">Upload &amp; analyze</button></div>
+            </form>
+        </div>
+
+        <div class="input-mode-panel" data-mode-panel="record" hidden>
+            <p class="blurb">Record the interview directly in the browser. Tap Start, stop when done, preview, then Upload.</p>
+            <div class="record-controls">
+                <div data-rec-state="idle">
+                    <button type="button" class="record-start-btn" onclick="recStart('rec-coaching', '{{ root_path }}/coaching/upload')">{{ icon('record') }} Start recording</button>
+                </div>
+                <div data-rec-state="recording" hidden>
+                    <button type="button" class="record-stop-btn" onclick="recStop('rec-coaching')">{{ icon('stop') }} Stop</button>
+                    <span class="rec-timer-display"><span class="rec-dot">●</span> <span data-rec-timer>0:00</span></span>
+                </div>
+                <div data-rec-state="recorded" hidden>
+                    <audio data-rec-preview controls style="width: 100%; margin-bottom: 10px;"></audio>
+                    <div class="actions">
+                        <button type="button" data-rec-upload-btn onclick="recUpload('rec-coaching')">Upload &amp; analyze</button>
+                        <button type="button" class="secondary-btn" onclick="recReset('rec-coaching')">Re-record</button>
+                    </div>
+                </div>
+                <div data-rec-state="error" hidden>
+                    <p class="error" data-rec-error></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-mode-panel" data-mode-panel="text" hidden>
+            <p class="blurb">Paste a transcript you already have. No timestamps, but the LLM still scores reasoning, structure, and tone.</p>
+            <form method="post" action="{{ root_path }}/coaching/paste" class="company-form" onsubmit="syncMeta(this)">
+                <input type="hidden" name="company"><input type="hidden" name="interview_date"><input type="hidden" name="round">
+                <label>Transcript / written answer
+                    <textarea name="text" rows="10" required placeholder="Paste the transcript here."></textarea>
+                </label>
+                <div class="actions"><button type="submit">Analyze text</button></div>
+            </form>
+        </div>
+    </div>
+</section>
+<script src="{{ root_path }}/static/recorder.js?v={{ static_version }}"></script>
+<script>
+(function () {
+    const tabs = document.querySelectorAll('#wiz-step2 .input-mode-btn');
+    function show(mode) {
+        tabs.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+        document.querySelectorAll('#wiz-step2 [data-mode-panel]').forEach(p => {
+            p.hidden = (p.dataset.modePanel !== mode);
+        });
+    }
+    tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.mode)));
+})();
+
+// Copy step-1 wizard field values into a step-2 form's hidden inputs on submit.
+function syncMeta(form) {
+    const map = {company: 'wiz-company', interview_date: 'wiz-date', round: 'wiz-round'};
+    for (const [name, id] of Object.entries(map)) {
+        const src = document.getElementById(id);
+        const dst = form.querySelector(`input[name="${name}"]`);
+        if (src && dst) dst.value = src.value || '';
+    }
+    return true;
+}
+
+function _applyParsed(data) {
+    if (data.company && !document.getElementById('wiz-company').value) document.getElementById('wiz-company').value = data.company;
+    if (data.interview_date && !document.getElementById('wiz-date').value) document.getElementById('wiz-date').value = data.interview_date;
+    if (data.round && !document.getElementById('wiz-round').value) document.getElementById('wiz-round').value = data.round;
+}
+
+async function parseFromText() {
+    const text = document.getElementById('wiz-desc').value.trim();
+    if (!text) { alert('Type a description first (or use Record + Transcribe).'); return; }
+    const btn = document.getElementById('wiz-parse-btn');
+    const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '⏳ Parsing…';
+    try {
+        const res = await fetch('{{ root_path }}/coaching/parse-description', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin', body: JSON.stringify({text})
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        _applyParsed(await res.json());
+        btn.innerHTML = '✓ Filled'; setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 1500);
+    } catch (e) {
+        btn.innerHTML = '✗ ' + e.message; setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2500);
+    }
+}
+
+async function parseFromAudio() {
+    const blob = (window.recGetBlob && window.recGetBlob('rec-desc'));
+    if (!blob) { alert('Record a description first.'); return; }
+    const fd = new FormData();
+    fd.append('file', blob, 'desc.' + (window.recGetExt ? window.recGetExt('rec-desc') : 'webm'));
+    try {
+        const res = await fetch('{{ root_path }}/coaching/parse-description', {
+            method: 'POST', body: fd, credentials: 'same-origin'
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (data.description) document.getElementById('wiz-desc').value = data.description;
+        _applyParsed(data);
+    } catch (e) {
+        alert('Transcribe failed: ' + e.message);
+    }
+}
+</script>
+
+<section class="section">
+    <div class="sectionhead"><h2>Past interviews ({{ interviews|length }})</h2></div>
+    {% if interviews %}
+    <div class="table-scroll"><table class="healthtable jobs-table">
+        <thead><tr><th>#</th><th>Company</th><th>Round</th><th>Interview date</th><th>Status</th><th>Words</th><th>Uploaded</th></tr></thead>
+        <tbody>
+        {% for i in interviews %}
+        <tr data-href="{{ root_path }}/coaching/interview/{{ i.id }}">
+            <td>{{ i.id }}</td>
+            <td>{{ i.company or "—" }}</td>
+            <td>{{ i.round or "—" }}</td>
+            <td class="detail">{{ i.interview_date or "—" }}</td>
+            <td>{% if i.report_path %}<span class="badge status-ok">ready</span>{% else %}<span class="badge status-warn">processing</span>{% endif %}</td>
+            <td class="detail">{{ i.word_count or "—" }}</td>
+            <td class="detail">{{ i.occurred_at }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    {% else %}
+    <p class="muted">No interviews yet.</p>
+    {% endif %}
+</section>
+
+<section class="section">
+    <div class="sectionhead"><h2>Recent practice sessions ({{ practice_rows|length }})</h2></div>
+    {% if practice_rows %}
+    <div class="table-scroll"><table class="healthtable jobs-table">
+        <thead><tr><th>#</th><th>Question</th><th>When</th><th>Status</th><th>Words</th></tr></thead>
+        <tbody>
+        {% for s in practice_rows %}
+        <tr data-href="{{ root_path }}/coaching/practice/{{ s.id }}">
+            <td>{{ s.id }}</td>
+            <td>{{ s.question[:60] }}</td>
+            <td class="detail">{{ s.occurred_at }}</td>
+            <td>{% if s.report_path %}<span class="badge status-ok">ready</span>{% else %}<span class="badge status-warn">processing</span>{% endif %}</td>
+            <td class="detail">{{ s.word_count or "—" }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    <p class="blurb"><a href="{{ root_path }}/practice">Practice mode →</a></p>
+    {% else %}
+    <p class="muted">No practice sessions yet. <a href="{{ root_path }}/practice">Start one.</a></p>
+    {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Batch #{{ batch.id }} — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Jobs','/jobs'), ('Batches','/batches')] %}
+{% set subtab_active = '/batches' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>{{ batch.name or "Batch #" ~ batch.id }}</h1>
+    <p class="muted">
+        <a href="{{ root_path }}/batches">← Back to batches</a> ·
+        Batch #{{ batch.id }} ·
+        Status: <strong>{{ batch.status }}</strong> ·
+        {{ jobs|length }} jobs ·
+        Triggered {{ batch.triggered_at }}
+    </p>
+</header>
+
+{% set any_ready = jobs|selectattr('cover_letter')|list|length %}
+<section class="section">
+    <div class="sectionhead"><h2>Batch name</h2></div>
+    <form method="post" action="{{ root_path }}/batches/{{ batch.id }}/rename" class="company-form">
+        <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;">
+            <label style="flex: 1 1 200px; margin: 0;">
+                <input type="text" name="name" maxlength="80" value="{{ batch.name or '' }}" placeholder="e.g. Veeva-pattern week 1">
+            </label>
+            <button type="submit">Save name</button>
+        </div>
+    </form>
+</section>
+
+<section class="section">
+    {% if batch.status == 'generating' %}
+    <p class="blurb">{{ icon('refresh') }} Content is generating in the background. Refresh in ~30s to see progress.</p>
+    {% endif %}
+    <form method="post" action="{{ root_path }}/batches/{{ batch.id }}/generate"
+          onsubmit="return confirm('Generate cover letters + why-this-company for all {{ jobs|length }} jobs in this batch? Approx cost: $' + ({{ jobs|length }} * 0.015).toFixed(2) + '.');">
+        <div class="actions">
+            <button type="submit">
+                {% if any_ready %}{{ icon('refresh') }} Re-generate content{% else %}{{ icon('sparkles') }} Generate content{% endif %}
+            </button>
+            <span class="muted small">~$0.01-0.02 per job · runs in background</span>
+        </div>
+    </form>
+</section>
+
+{% for j in jobs %}
+<section class="section batch-job">
+    <div class="sectionhead">
+        <h2>
+            <span class="fitscore">{{ j.fit_score or 0 }}</span>
+            <a href="{{ root_path }}/jobs/{{ j.id }}" class="batch-job-link">{{ j.company }} — {{ j.title }}</a>
+        </h2>
+        <a href="{{ j.url }}" target="_blank" rel="noopener" class="muted">open JD ↗</a>
+    </div>
+    <p class="blurb">
+        {{ j.location or "—" }} · resume match {{ "%.2f"|format(j.ats_score or 0) }} ·
+        stage: {{ j.stage }}
+    </p>
+
+    {% if j.fit_reason %}
+    <details>
+        <summary>LLM screen rationale</summary>
+        <p class="detail">{{ j.fit_reason }}</p>
+    </details>
+    {% endif %}
+
+    {% if j.cover_letter %}
+    <h3 class="content-h3">Cover letter</h3>
+    <div class="generated-text">{{ j.cover_letter }}</div>
+    {% else %}
+    <p class="muted">No cover letter yet — content gen may have failed for this job.</p>
+    {% endif %}
+
+    {% if j.why_company %}
+    <h3 class="content-h3">Why this company</h3>
+    <div class="generated-text">{{ j.why_company }}</div>
+    {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

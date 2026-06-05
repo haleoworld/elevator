@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>{% block title %}Elevator{% endblock %}</title>
+    <link rel="stylesheet" href="{{ root_path }}/static/style.css?v={{ static_version }}">
+</head>
+<body>
+    {% block nav %}
+    {# Strip the deployment prefix so route matches work regardless of mount point. #}
+    {% set p = request.url.path[root_path|length:] if root_path and request.url.path.startswith(root_path) else request.url.path %}
+    {% set in_setup    = p == '/profile' or p.startswith('/profile/') or p == '/companies' or p.startswith('/companies/') %}
+    {% set in_pipeline = p == '/jobs'    or p.startswith('/jobs/')    or p == '/batches'   or p.startswith('/batches/') %}
+    {% set in_prep     = p == '/coaching' or p.startswith('/coaching/') or p == '/practice' or p.startswith('/practice/') %}
+    <nav class="topnav">
+        <div class="topnav-row1">
+            <a href="{{ root_path }}/profile" class="brand">Elevator</a>
+            <div class="topnav-actions">
+                <button type="button" class="linkbtn refresh-btn"
+                        onclick="const u = new window.URL(location.href); u.searchParams.set('_r', Date.now()); location.href = u.toString();"
+                        title="Hard refresh (bust cache)">{{ icon('refresh') }}</button>
+                <form method="post" action="{{ root_path }}/logout" class="inline">
+                    <button type="submit" class="linkbtn">Logout</button>
+                </form>
+            </div>
+        </div>
+        <div class="navlinks">
+            <a href="{{ root_path }}/profile"  {% if in_setup    %}class="active"{% endif %}>Setup</a>
+            <a href="{{ root_path }}/jobs"     {% if in_pipeline %}class="active"{% endif %}>Pipeline</a>
+            <a href="{{ root_path }}/coaching" {% if in_prep     %}class="active"{% endif %}>Prep</a>
+            <a href="{{ root_path }}/health"   {% if p == '/health' %}class="active"{% endif %}>Health</a>
+        </div>
+    </nav>
+    {% endblock %}
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <script>
+    /* Tappable table rows: any <tr data-href="..."> navigates on click,
+       except when the click originated on an interactive child element. */
+    document.addEventListener('click', function (e) {
+        const tr = e.target.closest('tr[data-href]');
+        if (!tr) return;
+        if (e.target.closest('input, button, a, label, select, textarea')) return;
+        window.location.href = tr.dataset.href;
+    });
+    </script>
+</body>
+</html>

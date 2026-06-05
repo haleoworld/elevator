@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Paste a job — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Jobs','/jobs'), ('Batches','/batches')] %}
+{% set subtab_active = '/jobs' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Paste a job posting</h1>
+    <p class="muted">
+        Use this when you spot a job in the wild (LinkedIn, email, X, a friend's tip) that you want
+        in the pipeline. It bypasses the Phase 2 curated-company filter
+        (you're asserting it's a fit) and goes straight to Phase 3 LLM screening.
+        <br><br>
+        <strong>Only URL is required.</strong> Save now with just the URL, then re-paste the same URL later
+        with the other fields filled in — the existing row will be updated. LLM screening runs
+        whenever a JD is present.
+    </p>
+</header>
+
+<section class="section">
+    <form method="post" action="{{ root_path }}/jobs/paste" class="company-form">
+        <div class="formrow">
+            <label>URL *
+                <input type="text" name="url" required maxlength="500" placeholder="https://...">
+            </label>
+            <label>Company
+                <input type="text" name="company" maxlength="120" placeholder="e.g. Verkada">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Title
+                <input type="text" name="title" maxlength="200" placeholder="e.g. Senior Frontend Engineer">
+            </label>
+            <label>Location
+                <input type="text" name="location" maxlength="200" placeholder="Remote, NYC, SF Bay, …">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Work arrangement
+                <input type="text" name="work_arrangement" maxlength="40" placeholder="Remote / Hybrid / On-site">
+            </label>
+            <label>Job type
+                <input type="text" name="job_type" maxlength="40" placeholder="Full-time / Contract / Part-time">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Salary
+                <input type="text" name="salary_range" maxlength="60" placeholder="e.g. 150000-200000 USD">
+            </label>
+            <label>Posted date
+                <input type="text" name="posted_date" maxlength="20" placeholder="YYYY-MM-DD">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Reference ID
+                <input type="text" name="reference_id" maxlength="60" placeholder="e.g. JR-0102005">
+            </label>
+            <label>Job board
+                <input type="text" name="job_board" maxlength="60" placeholder="e.g. LinkedIn, careers page">
+            </label>
+        </div>
+        <label>Job description (paste raw text)
+            <textarea name="jd_text" id="jd_text" rows="14" placeholder="Paste the JD here. Leave empty to save the URL for later — screening runs once you fill this in."></textarea>
+        </label>
+        <div class="actions">
+            <button type="button" id="auto-parse-btn" onclick="autoParseJD()" class="secondary-btn">{{ icon('sparkles') }} Auto-fill from JD</button>
+            <span class="muted small">Haiku extracts Company / Title / Location (~$0.001)</span>
+        </div>
+        <div class="actions">
+            <button type="submit">Save</button>
+            <span class="muted small">LLM screening (~$0.015) runs when a JD is present.</span>
+        </div>
+    </form>
+</section>
+<script>
+async function autoParseJD() {
+    const jd = document.getElementById('jd_text').value.trim();
+    if (!jd) { alert('Paste a JD first, then tap Auto-fill.'); return; }
+    const btn = document.getElementById('auto-parse-btn');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Parsing…';
+    try {
+        const res = await fetch('{{ root_path }}/jobs/paste/auto-parse', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({jd_text: jd}),
+        });
+        if (!res.ok) {
+            const body = await res.text();
+            throw new Error('HTTP ' + res.status + ' ' + body.substring(0, 100));
+        }
+        const data = await res.json();
+        let filled = 0;
+        // Plain string fields
+        for (const k of ['company', 'title', 'location', 'work_arrangement',
+                         'job_type', 'posted_date', 'reference_id', 'job_board']) {
+            const input = document.querySelector(`[name="${k}"]`);
+            if (!input) continue;
+            if (!input.value.trim() && data[k]) {
+                input.value = data[k];
+                filled++;
+            }
+        }
+        // Salary: combine min/max/currency into a friendly range string
+        const sal = document.querySelector('[name="salary_range"]');
+        if (sal && !sal.value.trim() && data.salary_min && data.salary_max) {
+            const cur = data.salary_currency || '';
+            sal.value = `${data.salary_min}-${data.salary_max}${cur ? ' ' + cur : ''}`;
+            filled++;
+        }
+        btn.innerHTML = filled > 0 ? `✓ Filled ${filled} field${filled === 1 ? '' : 's'}` : '— nothing new';
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+    } catch (e) {
+        btn.innerHTML = '✗ ' + (e.message || 'failed');
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 3000);
+    }
+}
+</script>
+{% endblock %}

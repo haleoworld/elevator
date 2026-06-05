@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block title %}{{ j.company }} — {{ j.title[:50] }}{% endblock %}
+{% block content %}
+{% set subtabs = [('Jobs','/jobs'), ('Batches','/batches')] %}
+{% set subtab_active = '/jobs' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <p class="muted"><a href="{{ root_path }}/jobs">← Back to jobs</a></p>
+    <h1>{{ j.title }}</h1>
+    <p class="muted">{{ j.company }} · {{ j.location or "location unknown" }}</p>
+    <div class="actions" style="margin-top: 8px;">
+        <a href="{{ root_path }}/jobs/{{ j.id }}/edit" class="secondary-btn">{{ icon('pencil') }} Edit</a>
+        <button type="button" class="copy-btn" onclick="copyText('page-export', this)" title="Copy everything on this page to clipboard" style="margin-left: 8px;">{{ icon('copy') }} Copy everything</button>
+    </div>
+</header>
+
+<pre id="page-export" hidden>{{ j.company }} — {{ j.title }}
+{{ j.location or "—" }}
+{{ j.url }}
+
+{% if j.fit_score is not none -%}
+═══ LLM SCORE ═══
+Fit score:     {{ j.fit_score }} / 100
+FE role:       {{ 'yes' if j.is_frontend else 'no' }}
+Resume match:  {{ "%.2f"|format(j.ats_score or 0) }}
+
+{% if j.perspectives and j.perspectives|selectattr('score')|list %}
+Per-perspective breakdown:
+{% for p in j.perspectives %}{% if p.score is not none %}
+{{ p.label }} — {{ p.score }} / 100
+{{ (p.analysis or '(no analysis)') | unescape_html }}
+{% endif %}{% endfor %}
+{% else %}
+Why this score:
+{{ (j.fit_reason or '(no reason given)') | unescape_html }}
+{% endif %}
+{% if j.missing_requirements %}
+Missing on your resume:
+{% for m in j.missing_requirements %}- {{ m | unescape_html }}
+{% endfor %}{% endif %}
+{%- endif %}
+═══ KEY FIELDS ═══
+Company:           {{ j.company }}
+Location:          {{ j.location or "—" }}
+Work arrangement:  {{ j.remote_type or "—" }}
+Job type:          {{ j.analysis.job_type or "—" }}
+Salary:            {% if j.salary_min or j.salary_max %}{{ j.salary_min or "" }} – {{ j.salary_max or "" }} {{ j.salary_currency or "" }}{% else %}—{% endif %}
+Posted:            {{ j.posted_at or "—" }}
+Discovered:        {{ j.discovered_at }}
+Reference ID:      {{ j.external_id or "—" }}
+{% if j.analysis.frontend_split is not none -%}
+Frontend share:    {{ j.analysis.frontend_split }}% (FE {{ j.analysis.fe_total }} / BE {{ j.analysis.be_total }} mentions)
+{% endif -%}
+Source:            {{ j.source }}
+Apply:             {{ j.url }}
+
+{% if j.analysis.tech_stack -%}
+═══ TECH STACK ({{ j.analysis.tech_stack|length }}) ═══
+{{ j.analysis.tech_stack|join(', ') }}
+
+{% endif -%}
+{% if j.analysis.fe_counts -%}
+═══ FRONTEND ({{ j.analysis.fe_total }}) ═══
+{% for label, n in j.analysis.fe_counts|dictsort(by='value', reverse=true) -%}
+- {{ label }}{% if n > 1 %} ×{{ n }}{% endif %}
+{% endfor %}
+{% endif -%}
+{% if j.analysis.be_counts -%}
+═══ BACKEND ({{ j.analysis.be_total }}) ═══
+{% for label, n in j.analysis.be_counts|dictsort(by='value', reverse=true) -%}
+- {{ label }}{% if n > 1 %} ×{{ n }}{% endif %}
+{% endfor %}
+{% endif -%}
+{% if j.analysis.requirements -%}
+═══ REQUIREMENTS ({{ j.analysis.requirements|length }}) ═══
+{% for r in j.analysis.requirements -%}
+- {{ r }}
+{% endfor %}
+{% endif -%}
+{% if j.jd_text -%}
+═══ JOB DESCRIPTION ═══
+{{ j.jd_text | unescape_html }}
+
+{% endif -%}
+═══ PIPELINE STATE ═══
+Stage:   {{ j.stage }}
+Filter:  {{ j.filter_status }}{% if j.drop_reason %} — {{ j.drop_reason }}{% endif %}
+
+— Elevator</pre>
+
+{% if j.fit_score is not none %}
+<section class="section">
+    <div class="sectionhead">
+        <h2>
+            <span class="fit-pill fit-pill-big {{ j.score_class }}">{{ j.fit_score }}</span>
+            {% if j.is_frontend %}<span class="badge status-ok">FE</span>
+            {% else %}<span class="badge status-fail">not FE</span>{% endif %}
+            <span class="muted small">resume match {{ "%.2f"|format(j.ats_score or 0) }}</span>
+        </h2>
+    </div>
+
+    <details class="score-help">
+        <summary class="muted small">What do these scores mean?</summary>
+        <ul class="detail" style="margin: 8px 0 0 18px;">
+            <li><strong>{{ j.fit_score }} (Fit score, 0–100)</strong> — Sonnet's judgment of how well this job fits your profile (segment, seniority, tech stack, FE focus). 80+ = great match; 60–79 = decent; 40–59 = mismatch on something; &lt;40 = clearly wrong fit.</li>
+            <li><strong>{{ 'FE' if j.is_frontend else 'not FE' }}</strong> — Whether the LLM thinks this is fundamentally a frontend engineering role (even if the title is generic like "Senior Engineer").</li>
+            <li><strong>resume match ({{ "%.2f"|format(j.ats_score or 0) }}, 0–1)</strong> — How well your resume covers the JD's specific requirements. 1.0 = resume has it all; lower = gaps. The "Missing on your resume" list below shows what's missing.</li>
+        </ul>
+    </details>
+
+    {% if j.perspectives and j.perspectives|selectattr('score')|list %}
+    <h3 class="content-h3">Per-perspective breakdown</h3>
+    <ul class="persp-list">
+        {% for p in j.perspectives %}
+        {% if p.score is not none %}
+        <li class="persp">
+            <div class="persp-head">
+                <span class="fit-pill {{ p.score_class }}">{{ p.score }}</span>
+                <strong>{{ p.label }}</strong>
+            </div>
+            <p class="persp-analysis">{{ (p.analysis or '(no analysis)') | unescape_html }}</p>
+        </li>
+        {% endif %}
+        {% endfor %}
+    </ul>
+    {% elif j.fit_reason %}
+    <h3 class="content-h3">Why the LLM gave this score</h3>
+    <p>{{ j.fit_reason | unescape_html }}</p>
+    {% endif %}
+    {% if j.missing_requirements %}
+    <h3 class="content-h3">Missing on your resume</h3>
+    <ul>{% for m in j.missing_requirements %}<li>{{ m | unescape_html }}</li>{% endfor %}</ul>
+    {% endif %}
+</section>
+{% endif %}
+
+{# ---------------- Key fields ---------------- #}
+<section class="section">
+    <div class="sectionhead"><h2>Key fields</h2></div>
+    <div class="table-scroll"><table class="healthtable">
+        <tbody>
+        <tr><td>Company</td><td>{{ j.company }}</td></tr>
+        <tr><td>Location</td><td>{{ j.location or "—" }}</td></tr>
+        <tr><td>Work arrangement</td><td>{{ j.remote_type or "—" }}</td></tr>
+        <tr><td>Job type</td><td>{{ j.job_type or j.analysis.job_type or "—" }}</td></tr>
+        {% if j.salary_min or j.salary_max %}
+        <tr><td>Salary</td><td>{{ j.salary_min or "" }} – {{ j.salary_max or "" }} {{ j.salary_currency or "" }}</td></tr>
+        {% else %}
+        <tr><td>Salary</td><td>—</td></tr>
+        {% endif %}
+        <tr><td>Posted</td><td class="detail">{{ j.posted_at or "—" }}</td></tr>
+        <tr><td>Discovered</td><td class="detail">{{ j.discovered_at }}</td></tr>
+        <tr><td>Reference ID</td><td class="detail">{{ j.reference_id or j.external_id or "—" }}</td></tr>
+        <tr><td>Job board</td><td>{{ j.job_board or "—" }}</td></tr>
+        {% if j.analysis.frontend_split is not none %}
+        <tr><td>Frontend share (keyword)</td><td><strong>{{ j.analysis.frontend_split }}%</strong>
+            <span class="muted small">(FE {{ j.analysis.fe_total }} / BE {{ j.analysis.be_total }} mentions)</span></td></tr>
+        {% endif %}
+        <tr><td>Source</td><td>{{ j.source }}</td></tr>
+        <tr><td>Apply</td><td><a href="{{ j.url }}" target="_blank" rel="noopener">open ↗</a></td></tr>
+        </tbody>
+    </table></div>
+</section>
+
+{# ---------------- Tech stack ---------------- #}
+{% if j.analysis.tech_stack %}
+<section class="section">
+    <div class="sectionhead"><h2>Tech stack ({{ j.analysis.tech_stack|length }})</h2></div>
+    <div class="techpills">
+        {% for label in j.analysis.tech_stack %}
+        <span class="tech-pill">{{ label }}</span>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{# ---------------- FE/BE breakdown ---------------- #}
+{% if j.analysis.fe_counts or j.analysis.be_counts %}
+<section class="section">
+    <div class="sectionhead"><h2>FE / BE breakdown</h2></div>
+    {% if j.analysis.fe_counts %}
+    <h3 class="content-h3" style="color: var(--ok);">Frontend ({{ j.analysis.fe_total }})</h3>
+    <div class="techpills">
+        {% for label, n in j.analysis.fe_counts|dictsort(by='value', reverse=true) %}
+        <span class="tech-pill">{{ label }}{% if n > 1 %} <span class="muted small">×{{ n }}</span>{% endif %}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if j.analysis.be_counts %}
+    <h3 class="content-h3" style="color: var(--fail); margin-top: 14px;">Backend ({{ j.analysis.be_total }})</h3>
+    <div class="techpills">
+        {% for label, n in j.analysis.be_counts|dictsort(by='value', reverse=true) %}
+        <span class="tech-pill">{{ label }}{% if n > 1 %} <span class="muted small">×{{ n }}</span>{% endif %}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endif %}
+
+{# ---------------- Requirements ---------------- #}
+{% if j.analysis.requirements %}
+<section class="section">
+    <div class="sectionhead"><h2>Requirements ({{ j.analysis.requirements|length }})</h2></div>
+    <p class="muted small">Best-effort extraction from the JD's "Requirements / Qualifications" section.</p>
+    <ul>{% for r in j.analysis.requirements %}<li>{{ r }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{# ---------------- JD text ---------------- #}
+{% if j.jd_text %}
+<section class="section">
+    <div class="sectionhead">
+        <h2>Job description</h2>
+        <button type="button" class="copy-btn" onclick="copyText('jd-text', this)" title="Copy to clipboard">{{ icon('copy') }} Copy</button>
+    </div>
+    <div id="jd-text" class="generated-text jd-formatted" style="font-size: 14px;">{{ j.jd_text_html }}</div>
+</section>
+<script>
+function copyText(targetId, btn) {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    // For hidden <pre>, .innerText is empty in some browsers — fall back to textContent.
+    const text = (el.innerText && el.innerText.trim()) ? el.innerText : (el.textContent || '');
+    const showCopied = () => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '✓ Copied';
+        setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(showCopied).catch(() => fallbackCopy(text, showCopied));
+    } else {
+        fallbackCopy(text, showCopied);
+    }
+}
+function fallbackCopy(text, done) {
+    // iOS Safari < 13.4 needs this older path
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {}
+    document.body.removeChild(ta);
+}
+</script>
+{% endif %}
+
+<section class="section">
+    <div class="sectionhead"><h2>Pipeline state</h2></div>
+    <div class="table-scroll"><table class="healthtable">
+        <tbody>
+        <tr><td>Stage</td><td>{{ j.stage }}</td></tr>
+        {% if j.filter_status %}<tr><td>Filter</td><td>{{ j.filter_status }}{% if j.drop_reason %} — {{ j.drop_reason }}{% endif %}</td></tr>{% endif %}
+        </tbody>
+    </table></div>
+</section>
+{% endblock %}

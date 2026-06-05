@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Login — Elevator{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
+<div class="login-card">
+    <h1>Elevator</h1>
+    <p class="muted">Sign in to continue.</p>
+    <form method="post" action="{{ root_path }}/login" autocomplete="off">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autofocus required>
+        <button type="submit">Sign in</button>
+        {% if error %}
+        <p class="error" role="alert">Wrong password.</p>
+        {% endif %}
+    </form>
+</div>
+{% endblock %}

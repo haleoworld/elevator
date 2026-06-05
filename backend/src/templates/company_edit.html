@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ company.name }} — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Profile','/profile'), ('Companies','/companies')] %}
+{% set subtab_active = '/companies' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Edit “{{ company.name }}”</h1>
+    <p class="muted"><a href="{{ root_path }}/companies">← Back to companies</a></p>
+</header>
+
+{% if errors %}
+<div class="error">
+    {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+</div>
+{% endif %}
+
+<section class="section">
+    {% with form_action=root_path + "/companies/" + company.slug + "/edit" %}
+    {% include "_company_form.html" %}
+    {% endwith %}
+</section>
+
+<section class="section" style="border-color: var(--fail);">
+    <div class="sectionhead"><h2>Delete</h2></div>
+    <p class="blurb">Removes the row entirely. Already-discovered jobs in jobs.db are not touched.</p>
+    <form method="post" action="{{ root_path }}/companies/{{ company.slug }}/delete" onsubmit="return confirm('Delete {{ company.name }}? Discovered jobs in the DB are kept.');">
+        <button type="submit" style="background: var(--fail); color: white;">Delete {{ company.name }}</button>
+    </form>
+</section>
+{% endblock %}

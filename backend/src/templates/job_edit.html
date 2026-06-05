@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Edit job — {{ j.title or 'untitled' }}{% endblock %}
+{% block content %}
+{% set subtabs = [('Jobs','/jobs'), ('Batches','/batches')] %}
+{% set subtab_active = '/jobs' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <p class="muted"><a href="{{ root_path }}/jobs/{{ j.id }}">← Back to job</a></p>
+    <h1>Edit job #{{ j.id }}</h1>
+    <p class="muted">
+        Edit fields below and save. Changing the JD will re-run Phase 3 LLM screening (~$0.015).
+        Other field-only edits don't trigger a re-screen.
+    </p>
+</header>
+
+<section class="section">
+    <form method="post" action="{{ root_path }}/jobs/{{ j.id }}/edit" class="company-form">
+        <div class="formrow">
+            <label>URL *
+                <input type="text" name="url" required maxlength="500" value="{{ j.url or '' }}">
+            </label>
+            <label>Company
+                <input type="text" name="company" maxlength="120" value="{{ j.company or '' }}">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Title
+                <input type="text" name="title" maxlength="200" value="{{ j.title or '' }}">
+            </label>
+            <label>Location
+                <input type="text" name="location" maxlength="200" value="{{ j.location or '' }}">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Work arrangement
+                <input type="text" name="work_arrangement" maxlength="40" value="{{ j.remote_type or '' }}" placeholder="Remote / Hybrid / On-site">
+            </label>
+            <label>Job type
+                <input type="text" name="job_type" maxlength="40" value="{{ j.job_type or '' }}" placeholder="Full-time / Contract / Part-time">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Salary
+                <input type="text" name="salary_range" maxlength="60"
+                       value="{% if j.salary_min or j.salary_max %}{{ j.salary_min or '' }}-{{ j.salary_max or '' }}{% if j.salary_currency %} {{ j.salary_currency }}{% endif %}{% endif %}"
+                       placeholder="e.g. 150000-200000 USD">
+            </label>
+            <label>Posted date
+                <input type="text" name="posted_date" maxlength="20" value="{{ j.posted_at[:10] if j.posted_at else '' }}" placeholder="YYYY-MM-DD">
+            </label>
+        </div>
+        <div class="formrow">
+            <label>Reference ID
+                <input type="text" name="reference_id" maxlength="60" value="{{ j.reference_id or '' }}" placeholder="e.g. JR-0102005">
+            </label>
+            <label>Job board
+                <input type="text" name="job_board" maxlength="60" value="{{ j.job_board or '' }}" placeholder="e.g. LinkedIn, careers page">
+            </label>
+        </div>
+        <label>Job description (paste raw text)
+            <textarea name="jd_text" id="jd_text" rows="14">{{ j.jd_text or '' }}</textarea>
+        </label>
+        <div class="actions">
+            <button type="button" id="auto-parse-btn" onclick="autoParseJD()" class="secondary-btn">{{ icon('sparkles') }} Auto-fill from JD</button>
+            <span class="muted small">Re-runs Haiku extraction (~$0.001) on the JD text and updates empty fields.</span>
+        </div>
+        <div class="actions">
+            <button type="submit">Save changes</button>
+            <a href="{{ root_path }}/jobs/{{ j.id }}" class="secondary-btn" style="margin-left: 8px;">Cancel</a>
+        </div>
+    </form>
+</section>
+<script>
+async function autoParseJD() {
+    const jd = document.getElementById('jd_text').value.trim();
+    if (!jd) { alert('Paste a JD first, then tap Auto-fill.'); return; }
+    const btn = document.getElementById('auto-parse-btn');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Parsing…';
+    try {
+        const res = await fetch('{{ root_path }}/jobs/paste/auto-parse', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({jd_text: jd}),
+        });
+        if (!res.ok) {
+            const body = await res.text();
+            throw new Error('HTTP ' + res.status + ' ' + body.substring(0, 100));
+        }
+        const data = await res.json();
+        let filled = 0;
+        for (const k of ['company', 'title', 'location', 'work_arrangement',
+                         'job_type', 'posted_date', 'reference_id', 'job_board']) {
+            const input = document.querySelector(`[name="${k}"]`);
+            if (!input) continue;
+            if (!input.value.trim() && data[k]) {
+                input.value = data[k];
+                filled++;
+            }
+        }
+        const sal = document.querySelector('[name="salary_range"]');
+        if (sal && !sal.value.trim() && data.salary_min && data.salary_max) {
+            const cur = data.salary_currency || '';
+            sal.value = `${data.salary_min}-${data.salary_max}${cur ? ' ' + cur : ''}`;
+            filled++;
+        }
+        btn.innerHTML = filled > 0 ? `✓ Filled ${filled} field${filled === 1 ? '' : 's'}` : '— nothing new';
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+    } catch (e) {
+        btn.innerHTML = '✗ ' + (e.message || 'failed');
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 3000);
+    }
+}
+</script>
+{% endblock %}

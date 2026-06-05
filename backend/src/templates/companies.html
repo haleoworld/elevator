@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Companies — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Profile','/profile'), ('Companies','/companies')] %}
+{% set subtab_active = '/companies' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Curated companies</h1>
+    <p class="muted">
+        Greenhouse/Lever slugs trigger direct pulls; the rest are matched in Adzuna by name.
+        Disable a row to keep it for history without pulling.
+    </p>
+    <div class="actions" style="margin-top: 8px;">
+        <a href="{{ root_path }}/companies/add" class="primary-link-btn">+ Add company</a>
+    </div>
+</header>
+
+{% if errors %}
+<div class="error">
+    {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+</div>
+{% endif %}
+{% if saved %}<div class="saved" role="status">Saved: {{ saved }}.</div>{% endif %}
+
+{% set has_filter = q_pattern or q_segment or q_size or q_canada or q_ats or q_on %}
+
+<form method="get" action="{{ root_path }}/companies" class="company-form" style="margin-bottom: 14px;">
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <label style="flex: 1 1 140px;">Pattern
+            <select name="q_pattern">
+                <option value="">— any —</option>
+                {% for p in ['Veeva','Veeva-adjacent','CrowdStrike','Ouster','Other'] %}
+                <option value="{{ p }}" {% if q_pattern == p %}selected{% endif %}>{{ p }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label style="flex: 1 1 160px;">Segment contains
+            <input type="text" name="q_segment" value="{{ q_segment }}" placeholder="e.g. fintech">
+        </label>
+        <label style="flex: 1 1 140px;">Size
+            <select name="q_size">
+                <option value="">— any —</option>
+                {% for b in headcount_bands %}
+                <option value="{{ b }}" {% if q_size == b %}selected{% endif %}>{{ b }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label style="flex: 1 1 130px;">Canada team
+            <select name="q_canada">
+                <option value=""        {% if q_canada == ''        %}selected{% endif %}>— any —</option>
+                <option value="yes"     {% if q_canada == 'yes'     %}selected{% endif %}>yes</option>
+                <option value="no"      {% if q_canada == 'no'      %}selected{% endif %}>no</option>
+                <option value="unknown" {% if q_canada == 'unknown' %}selected{% endif %}>unknown</option>
+            </select>
+        </label>
+        <label style="flex: 1 1 140px;">ATS
+            <select name="q_ats">
+                <option value=""       {% if q_ats == ''       %}selected{% endif %}>— any —</option>
+                <option value="gh"     {% if q_ats == 'gh'     %}selected{% endif %}>Greenhouse</option>
+                <option value="lv"     {% if q_ats == 'lv'     %}selected{% endif %}>Lever</option>
+                <option value="wd"     {% if q_ats == 'wd'     %}selected{% endif %}>Workday</option>
+                <option value="ab"     {% if q_ats == 'ab'     %}selected{% endif %}>Ashby</option>
+                <option value="sr"     {% if q_ats == 'sr'     %}selected{% endif %}>SmartRecruiters</option>
+                <option value="adzuna" {% if q_ats == 'adzuna' %}selected{% endif %}>Adzuna-only</option>
+            </select>
+        </label>
+        <label style="flex: 1 1 110px;">On
+            <select name="q_on">
+                <option value=""    {% if q_on == ''    %}selected{% endif %}>— any —</option>
+                <option value="on"  {% if q_on == 'on'  %}selected{% endif %}>ON</option>
+                <option value="off" {% if q_on == 'off' %}selected{% endif %}>OFF</option>
+            </select>
+        </label>
+    </div>
+    <div class="actions" style="margin-top: 10px;">
+        <button type="submit">Filter</button>
+        {% if has_filter %}
+        <a href="{{ root_path }}/companies" class="secondary-btn" style="margin-left: 8px;">Clear</a>
+        {% endif %}
+        <span class="muted small" style="margin-left: 12px;">
+            Showing {{ company_rows|length }}{% if has_filter %} of {{ total_rows }}{% endif %}
+        </span>
+    </div>
+</form>
+
+<form method="post" action="{{ root_path }}/companies/bulk-delete" id="bulk-form"
+      onsubmit="const n = document.querySelectorAll('input[name=slugs]:checked').length; if (n === 0) { alert('Select at least one company.'); return false; } return confirm('Delete ' + n + ' selected companies?');">
+    <div class="actions" style="margin-bottom: 10px;">
+        <button type="submit" style="background: var(--fail); color: white;">Delete selected</button>
+        <a href="#" onclick="event.preventDefault(); document.querySelectorAll('input[name=slugs]').forEach(cb => cb.checked = true);" class="muted small">select all</a>
+        <a href="#" onclick="event.preventDefault(); document.querySelectorAll('input[name=slugs]').forEach(cb => cb.checked = false);" class="muted small">clear</a>
+    </div>
+<div class="table-scroll"><table class="healthtable companies-table">
+    <thead>
+        <tr>
+            <th></th>
+            <th>Name</th>
+            <th>Pattern</th>
+            <th>Segment</th>
+            <th>Size</th>
+            <th>🇨🇦?</th>
+            <th>ATS</th>
+            <th>On</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in company_rows %}
+        {% set c = row.c %}
+        <tr data-href="{{ root_path }}/companies/{{ c.slug }}/edit">
+            <td><input type="checkbox" name="slugs" value="{{ c.slug }}"></td>
+            <td>
+                {{ c.name }}
+                {% if c.notes %}<div class="detail">{{ c.notes }}</div>{% endif %}
+            </td>
+            <td>
+                {% if row.pattern == 'Veeva' %}<span class="badge pattern-veeva">Veeva</span>
+                {% elif row.pattern == 'Veeva-adjacent' %}<span class="badge pattern-veeva-adjacent">Veeva-adj</span>
+                {% elif row.pattern == 'CrowdStrike' %}<span class="badge pattern-crowdstrike">CrowdStrike</span>
+                {% elif row.pattern == 'Ouster' %}<span class="badge pattern-ouster">Ouster</span>
+                {% else %}<span class="badge">Other</span>{% endif %}
+            </td>
+            <td><span class="badge">{{ c.segment or "—" }}</span></td>
+            <td>{{ c.headcount_band }}</td>
+            <td>
+                {% if c.has_canada_team == true %}<span class="badge status-ok">yes</span>
+                {% elif c.has_canada_team == false %}<span class="badge status-fail">no</span>
+                {% else %}<span class="badge" style="color: var(--muted)">?</span>{% endif %}
+            </td>
+            <td class="detail">
+                {% if c.greenhouse_slug %}gh:{{ c.greenhouse_slug }}<br>{% endif %}
+                {% if c.lever_slug %}lv:{{ c.lever_slug }}<br>{% endif %}
+                {% if c.workday_url %}wd:✓<br>{% endif %}
+                {% if c.ashby_slug %}ab:{{ c.ashby_slug }}<br>{% endif %}
+                {% if c.smartrecruiters_slug %}sr:{{ c.smartrecruiters_slug }}<br>{% endif %}
+                {% if not c.greenhouse_slug and not c.lever_slug and not c.workday_url and not c.ashby_slug and not c.smartrecruiters_slug %}adzuna-only{% endif %}
+            </td>
+            <td>
+                {% if c.enabled %}
+                <span class="badge status-ok">ON</span>
+                {% else %}
+                <span class="badge status-fail">OFF</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table></div>
+</form>
+
+{% endblock %}

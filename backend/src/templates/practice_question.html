@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Practice — {{ question.question[:40] }}{% endblock %}
+{% block content %}
+{% set subtabs = [('Coaching','/coaching'), ('Practice','/practice')] %}
+{% set subtab_active = '/practice' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Practice question</h1>
+    <p class="muted"><a href="{{ root_path }}/practice">← Back to practice</a> · {{ question.category.replace('_', ' ') }}</p>
+</header>
+
+<section class="section">
+    <div class="sectionhead"><h2>The question</h2></div>
+    <blockquote class="generated-text">{{ question.question }}</blockquote>
+    {% if question.variants %}
+    <details class="variant-box" style="margin-top: 10px;" open>
+        <summary>also asked as ({{ question.variants|length }})</summary>
+        <ul class="variant-list">
+            {% for v in question.variants %}
+            <li>{{ v.question }}</li>
+            {% endfor %}
+        </ul>
+    </details>
+    <p class="blurb muted small" style="margin-top:6px;">When you hear any of these in an interview, it's this same core — reuse your rehearsed answer.</p>
+    {% endif %}
+</section>
+
+<section class="section">
+    <div class="sectionhead"><h2>Your answer</h2></div>
+    <div class="input-mode-tabs" role="tablist">
+        <button type="button" class="input-mode-btn active" data-mode="audio" role="tab">{{ icon('mic') }} Upload</button>
+        <button type="button" class="input-mode-btn" data-mode="record" role="tab">{{ icon('record') }} Record</button>
+        <button type="button" class="input-mode-btn" data-mode="text" role="tab">{{ icon('pencil') }} Paste</button>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="audio">
+        <p class="blurb">
+            Open Voice Memos on your iPhone, hit record, answer as if it's a real interview,
+            stop, then upload the file here.
+        </p>
+        <form method="post" action="{{ root_path }}/practice/{{ question.id }}/record" enctype="multipart/form-data" class="company-form">
+            <label>Audio file
+                <input type="file" name="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.aiff" required>
+            </label>
+            <div class="actions">
+                <button type="submit">Upload &amp; analyze</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="record" hidden>
+        <p class="blurb">
+            Record directly in the browser. Tap Start, speak your answer, tap Stop, preview, then Upload.
+            The browser will ask for microphone permission the first time.
+        </p>
+        <div class="record-controls">
+            <div data-rec-state="idle">
+                <button type="button" class="record-start-btn" onclick="recStart('rec-prac', '{{ root_path }}/practice/{{ question.id }}/record')">{{ icon('record') }} Start recording</button>
+            </div>
+            <div data-rec-state="recording" hidden>
+                <button type="button" class="record-stop-btn" onclick="recStop('rec-prac')">{{ icon('stop') }} Stop</button>
+                <span class="rec-timer-display"><span class="rec-dot">●</span> <span data-rec-timer>0:00</span></span>
+            </div>
+            <div data-rec-state="recorded" hidden>
+                <audio data-rec-preview controls style="width: 100%; margin-bottom: 10px;"></audio>
+                <div class="actions">
+                    <button type="button" data-rec-upload-btn onclick="recUpload('rec-prac')">Upload &amp; analyze</button>
+                    <button type="button" class="secondary-btn" onclick="recReset('rec-prac')">Re-record</button>
+                </div>
+            </div>
+            <div data-rec-state="error" hidden>
+                <p class="error" data-rec-error></p>
+            </div>
+        </div>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="text" hidden>
+        <p class="blurb">
+            Type your answer instead of recording — useful for quick drafts or when you've already
+            written something out. The coaching report still scores reasoning, structure, and tone.
+        </p>
+        <form method="post" action="{{ root_path }}/practice/{{ question.id }}/paste" class="company-form">
+            <label>Your answer
+                <textarea name="text" rows="10" required placeholder="Type your answer as if you were speaking it."></textarea>
+            </label>
+            <div class="actions">
+                <button type="submit">Analyze text</button>
+            </div>
+        </form>
+    </div>
+</section>
+<script src="{{ root_path }}/static/recorder.js?v={{ static_version }}"></script>
+<script>
+(function () {
+    const tabs = document.querySelectorAll('.input-mode-btn');
+    const last = localStorage.getItem('practice_input_mode') || 'audio';
+    function show(mode) {
+        tabs.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+        document.querySelectorAll('[data-mode-panel]').forEach(p => {
+            p.hidden = (p.dataset.modePanel !== mode);
+        });
+        localStorage.setItem('practice_input_mode', mode);
+    }
+    tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.mode)));
+    show(last);
+})();
+</script>
+
+<section class="section">
+    <div class="sectionhead"><h2>Past attempts ({{ sessions|length }})</h2></div>
+    {% if sessions %}
+    <div class="table-scroll"><table class="healthtable jobs-table">
+        <thead><tr><th>#</th><th>When</th></tr></thead>
+        <tbody>
+        {% for s in sessions %}
+        <tr data-href="{{ root_path }}/coaching/practice/{{ s.id }}">
+            <td>{{ s.id }}</td>
+            <td class="detail">{{ s.occurred_at }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    {% else %}
+    <p class="muted">No attempts on this question yet.</p>
+    {% endif %}
+</section>
+{% endblock %}

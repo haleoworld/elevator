@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}System Health — Elevator{% endblock %}
+{% block content %}
+<header class="pageheader">
+    <h1>System Health</h1>
+    <p>
+        Overall:
+        <span class="badge status-{{ overall }}">{{ overall|upper }}</span>
+    </p>
+</header>
+
+<div class="table-scroll"><table class="healthtable">
+    <thead>
+        <tr><th>Check</th><th>Status</th><th>Detail</th></tr>
+    </thead>
+    <tbody>
+        {% for c in checks %}
+        <tr>
+            <td>{{ c.name }}</td>
+            <td><span class="badge status-{{ c.status }}">{{ c.status|upper }}</span></td>
+            <td class="detail">{{ c.detail }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table></div>
+
+<p class="muted small">Phase 1 only checks env, profile.md, the SQLite schema, and the data directories. Phase 5 will add cron, Whisper model, Telegram bot, and backup checks.</p>
+{% endblock %}

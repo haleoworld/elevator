@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Profile — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Profile','/profile'), ('Companies','/companies')] %}
+{% set subtab_active = '/profile' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Profile</h1>
+    <p class="muted">Each section saves independently. Markdown is preserved as-is.</p>
+</header>
+
+<nav class="sectionjump" aria-label="Jump to section">
+    {% for s in sections %}
+        <a href="#{{ s.key }}">{{ s.label }}</a>
+    {% endfor %}
+</nav>
+
+{% for s in sections %}
+<section id="{{ s.key }}" class="section{% if s.private %} private{% endif %}">
+    <div class="sectionhead">
+        <h2>{{ s.label }}</h2>
+        {% if s.private %}
+        <span class="badge private-badge" title="Coaching only — never used in outward content">PRIVATE — COACHING ONLY</span>
+        {% endif %}
+    </div>
+    <p class="blurb">{{ s.blurb }}</p>
+    <form method="post" action="{{ root_path }}/profile/{{ s.key }}">
+        <textarea
+            name="body"
+            rows="14"
+            spellcheck="true"
+            placeholder="(empty)"
+        >{{ bodies[s.name] }}</textarea>
+        <div class="actions">
+            <button type="submit">Save “{{ s.name }}”</button>
+            {% if saved_key == s.key %}
+            <span class="saved" role="status">Saved.</span>
+            {% endif %}
+        </div>
+    </form>
+</section>
+{% endfor %}
+{% endblock %}

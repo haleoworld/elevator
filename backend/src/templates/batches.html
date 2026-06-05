@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Batches — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Jobs','/jobs'), ('Batches','/batches')] %}
+{% set subtab_active = '/batches' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>Batches</h1>
+    <p class="muted">
+        A batch bundles scored jobs for content generation. Each one produces a
+        cover letter + why-this-company paragraph per job.
+    </p>
+</header>
+
+{% if not chat_registered %}
+<div class="error">
+    Telegram chat not registered. <a href="{{ root_path }}/telegram/register">Register here</a> before forming a batch if you want push notifications.
+</div>
+{% endif %}
+
+<section class="section">
+    <div class="sectionhead"><h2>Form a new batch</h2></div>
+    <p class="blurb">
+        A batch bundles jobs for cover-letter generation. Creating a batch does
+        <strong>not</strong> generate content — open the batch and hit "Generate
+        content" when you're ready (~$0.01-0.02 per job).
+    </p>
+
+    <div class="input-mode-tabs" role="tablist">
+        <button type="button" class="input-mode-btn active" data-mode="topn" role="tab">{{ icon('sparkles') }} Top-N by fit</button>
+        <button type="button" class="input-mode-btn" data-mode="handpick" role="tab">✋ Hand-pick</button>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="topn">
+        <form method="post" action="{{ root_path }}/batches/form" class="company-form">
+            <input type="hidden" name="mode" value="top_n">
+            <div class="formrow">
+                <label>Batch name (optional)
+                    <input type="text" name="name" maxlength="80" placeholder="e.g. Veeva-pattern week 1">
+                </label>
+                <label>How many jobs?
+                    <input type="number" name="top_n" value="5" min="1" max="20">
+                </label>
+            </div>
+            <div class="actions">
+                <button type="submit">Create batch</button>
+                <span class="muted small">Picks highest fit_score not already batched.</span>
+            </div>
+        </form>
+    </div>
+
+    <div class="input-mode-panel" data-mode-panel="handpick" hidden>
+        <form method="post" action="{{ root_path }}/batches/form" class="company-form">
+            <input type="hidden" name="mode" value="handpick">
+            <label>Batch name (optional)
+                <input type="text" name="name" maxlength="80" placeholder="e.g. Dream companies">
+            </label>
+            {% if pickable_jobs %}
+            <p class="blurb" style="margin-top: 10px;">
+                <label style="display: inline-block;">
+                    <input type="checkbox" onclick="this.closest('form').querySelectorAll('input[name=job_ids]').forEach(cb=>cb.checked=this.checked)">
+                    Select all ({{ pickable_jobs|length }} unbatched scored jobs)
+                </label>
+            </p>
+            <div class="table-scroll">
+            <table class="healthtable jobs-table">
+                <thead><tr><th></th><th>Fit</th><th>ATS</th><th>Company</th><th>Title</th></tr></thead>
+                <tbody>
+                {% for j in pickable_jobs %}
+                <tr>
+                    <td><input type="checkbox" name="job_ids" value="{{ j.id }}"></td>
+                    <td>{{ j.fit_score if j.fit_score is not none else "—" }}</td>
+                    <td>{% if j.ats_score is not none %}{{ "%.0f"|format(j.ats_score * 100) }}%{% else %}—{% endif %}</td>
+                    <td>{{ j.company }}</td>
+                    <td class="title-cell">{{ j.title }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            <div class="actions" style="margin-top: 12px;">
+                <button type="submit">Create batch from selected</button>
+            </div>
+            {% else %}
+            <p class="muted">No unbatched scored jobs available to pick.</p>
+            {% endif %}
+        </form>
+    </div>
+</section>
+<script>
+(function () {
+    const tabs = document.querySelectorAll('.input-mode-btn');
+    function show(mode) {
+        tabs.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+        document.querySelectorAll('[data-mode-panel]').forEach(p => {
+            p.hidden = (p.dataset.modePanel !== mode);
+        });
+    }
+    tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.mode)));
+})();
+</script>
+
+<section class="section">
+    <div class="sectionhead"><h2>Past batches</h2></div>
+    {% if batches %}
+    <form method="post" action="{{ root_path }}/batches/bulk-delete"
+          onsubmit="return confirm('Delete selected batches? Jobs in them return to scored.');">
+        <div class="table-scroll">
+        <table class="healthtable jobs-table">
+            <thead><tr><th><input type="checkbox" onclick="document.querySelectorAll('input[name=batch_ids]').forEach(cb=>cb.checked=this.checked)"></th><th>#</th><th>Name</th><th>Status</th><th>Jobs</th><th>Triggered</th><th>Notified</th></tr></thead>
+            <tbody>
+            {% for b in batches %}
+            <tr data-href="{{ root_path }}/batches/{{ b.id }}">
+                <td><input type="checkbox" name="batch_ids" value="{{ b.id }}"></td>
+                <td>{{ b.id }}</td>
+                <td>{{ b.name or "—" }}</td>
+                <td>
+                    {% if b.status == "ready" %}<span class="badge status-ok">ready</span>
+                    {% elif b.status == "generating" %}<span class="badge status-warn">generating</span>
+                    {% else %}<span class="badge">{{ b.status }}</span>{% endif %}
+                </td>
+                <td>{{ b.job_count or "—" }}</td>
+                <td class="detail">{{ b.triggered_at }}</td>
+                <td class="detail">{{ b.notified_at or "not sent" }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+            <button type="submit" class="secondary-btn">Delete selected</button>
+        </div>
+    </form>
+    {% else %}
+    <p class="muted">No batches yet. Form one above.</p>
+    {% endif %}
+</section>
+{% endblock %}

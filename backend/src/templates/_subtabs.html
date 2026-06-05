@@ -1,0 +1,10 @@
+{# Renders a subtabbar for a group. Usage:
+   {% set subtabs = [('Profile','/profile'), ('Companies','/companies')] %}
+   {% set subtab_active = '/profile' %}
+   {% include "_subtabs.html" %}
+#}
+<nav class="tabbar" aria-label="Sub-section tabs" style="margin-bottom: 14px;">
+    {% for label, path in subtabs %}
+    <a class="tab {% if subtab_active == path %}active{% endif %}" href="{{ root_path }}{{ path }}">{{ label }}</a>
+    {% endfor %}
+</nav>

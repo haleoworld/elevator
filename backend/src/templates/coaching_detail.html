@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — Elevator{% endblock %}
+{% block content %}
+{% set subtabs = [('Coaching','/coaching'), ('Practice','/practice')] %}
+{% set subtab_active = '/coaching' %}
+{% include "_subtabs.html" %}
+<header class="pageheader">
+    <h1>{{ title }}</h1>
+    <p class="muted">
+        <a href="{{ root_path }}/coaching">← Back to coaching</a> · uploaded {{ row.occurred_at }}
+        {% if kind == 'practice' %} · <em>{{ row.question }}</em>{% endif %}
+        {% if kind == 'interview' and row.company %} · {{ row.company }}{% endif %}
+        {% if kind == 'interview' and row.round %} · {{ row.round }}{% endif %}
+        {% if kind == 'interview' and row.interview_date %} · {{ row.interview_date }}{% endif %}
+    </p>
+    <div class="action-bar" style="margin-top: 8px;">
+        {% if transcript or report_md %}
+        <button type="button" class="copy-btn" onclick="copyText('interview-export', this)" title="Copy everything to clipboard">{{ icon('copy') }} Copy</button>
+        {% endif %}
+        {% if kind == 'interview' %}
+        <button type="button" class="secondary-btn" onclick="document.getElementById('rename-box').hidden = !document.getElementById('rename-box').hidden;">{{ icon('pencil') }} Rename</button>
+        <form method="post" action="{{ root_path }}/coaching/interview/{{ row.id }}/delete" style="display:inline;"
+              onsubmit="return confirm('Delete this interview and its audio, transcript, and report? This cannot be undone.');">
+            <button type="submit" class="secondary-btn danger-btn">{{ icon('trash') }} Delete</button>
+        </form>
+        {% endif %}
+    </div>
+    {% if kind == 'interview' %}
+    <form id="rename-box" hidden method="post" action="{{ root_path }}/coaching/interview/{{ row.id }}/rename" class="company-form" style="margin-top: 10px;">
+        <div class="formrow-3">
+            <label><span class="muted small">Company</span>
+                <input type="text" name="company" maxlength="120" value="{{ row.company or '' }}" placeholder="e.g. Veeva"></label>
+            <label><span class="muted small">Interview date</span>
+                <input type="text" name="interview_date" maxlength="40" value="{{ row.interview_date or '' }}" placeholder="YYYY-MM-DD"></label>
+            <label><span class="muted small">Round</span>
+                <input type="text" name="round" maxlength="60" value="{{ row.round or '' }}" placeholder="e.g. hiring-manager"></label>
+            <label><span class="muted small">Custom name (optional)</span>
+                <input type="text" name="name" maxlength="120" value="{{ row.name or '' }}" placeholder="Overrides the auto title"></label>
+        </div>
+        <div style="margin-top:8px;"><button type="submit">Save</button></div>
+    </form>
+    {% endif %}
+</header>
+
+<pre id="interview-export" hidden>{{ title }}
+{% if kind == 'practice' %}Question: {{ row.question }}{% elif kind == 'interview' and row.round %}Round: {{ row.round }}{% endif %}
+Uploaded: {{ row.occurred_at }}
+Status:   {{ status }}
+
+{% if transcript -%}
+═══ MECHANICAL METRICS ═══
+Words:           {{ transcript.word_count }}
+WPM:             {{ transcript.wpm }}
+Filler words:    {{ transcript.filler_count }} ({{ "%.1f"|format(transcript.filler_rate * 100) }}% of words)
+Talk ratio:      {{ "%.0f"|format(transcript.talk_ratio * 100) }}%
+Pause p50/p90:   {{ transcript.pause_p50 }}s / {{ transcript.pause_p90 }}s
+
+{% endif -%}
+{% if report_md -%}
+═══ COACHING REPORT ═══
+{{ report_md }}
+
+{% endif -%}
+{% if transcript_json -%}
+═══ TRANSCRIPT ═══
+{% if diarized and diarized.turns %}{% for t in diarized.turns %}{% if t.start_s is defined %}[{{ t.start_s | mmss }}] {% endif %}{{ t.speaker }}: {{ t.text }}
+
+{% endfor %}{% elif transcript_json.segments %}{% for seg in transcript_json.segments %}[{{ seg.start | mmss }}] {{ seg.text }}
+{% endfor %}{% else %}{{ transcript_json.text }}{% endif %}
+{% endif -%}
+— Elevator</pre>
+
+<section class="section">
+    <div class="sectionhead">
+        <h2>Status: <span class="badge {% if status == 'ready' %}status-ok{% else %}status-warn{% endif %}">{{ status }}</span></h2>
+    </div>
+    {% if status != 'ready' %}
+    <p class="blurb">
+        {% if status == 'transcribing' %}Whisper is transcribing in the background.{% else %}Sonnet is writing the coaching report.{% endif %}
+        Reload the page in ~30s to see progress.
+    </p>
+    {% endif %}
+
+    <audio controls preload="metadata" id="player" src="{{ audio_url }}" style="width: 100%; margin-top: 8px;"></audio>
+</section>
+
+{% if overall_text %}
+<section class="section">
+    <div class="sectionhead"><h2>Overall</h2></div>
+    <p>{{ overall_text }}</p>
+</section>
+{% endif %}
+
+{% if transcript %}
+<section class="section">
+    <div class="sectionhead"><h2>Mechanical metrics</h2></div>
+    <div class="table-scroll"><table class="healthtable">
+        <tbody>
+        <tr><td>Words</td><td><strong>{{ transcript.word_count }}</strong></td></tr>
+        {% if transcript.duration_s %}
+        <tr><td>Duration</td><td><strong>{{ "%d:%02d"|format((transcript.duration_s // 60)|int, (transcript.duration_s % 60)|int) }}</strong> ({{ "%.0f"|format(transcript.duration_s) }}s)</td></tr>
+        {% endif %}
+        <tr><td>WPM</td><td><strong>{{ transcript.wpm }}</strong></td></tr>
+        <tr><td>Filler words</td><td><strong>{{ transcript.filler_count }}</strong> ({{ "%.1f"|format(transcript.filler_rate * 100) }}% of words)</td></tr>
+        <tr><td>Talk ratio</td><td>{{ "%.0f"|format(transcript.talk_ratio * 100) }}%</td></tr>
+        <tr><td>Pause p50 / p90</td><td>{{ transcript.pause_p50 }}s / {{ transcript.pause_p90 }}s</td></tr>
+        </tbody>
+    </table></div>
+</section>
+{% endif %}
+
+{% if reasoning_text %}
+<section class="section">
+    <div class="sectionhead"><h2>Reasoning style</h2></div>
+    <p>{{ reasoning_text }}</p>
+</section>
+{% endif %}
+
+{% if practice_text %}
+<section class="section practice-card">
+    <div class="sectionhead"><h2>{{ icon('sparkles') }} Practice this next</h2></div>
+    <p>{{ practice_text }}</p>
+</section>
+{% endif %}
+
+{% if what_worked %}
+<section class="section worked-card">
+    <div class="sectionhead"><h2>{{ icon('check') }} What worked</h2></div>
+    <ul class="feedback-list">
+        {% for w in what_worked %}
+        <li class="feedback-item">
+            <a class="ts jump-ts" data-t="{{ w.ts_s }}" href="#">{{ w.ts_label }}</a>
+            <span class="fb-quote">“{{ w.quote | unescape_html }}”</span>
+            <p class="fb-why">→ {{ w.why | unescape_html }}</p>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endif %}
+
+{% if top_patterns %}
+<section class="section patterns-card">
+    <div class="sectionhead"><h2>{{ icon('warning') }} Top patterns to fix</h2></div>
+    {% for p in top_patterns %}
+    <div class="pattern">
+        <h3 class="content-h3">{{ p.name }}</h3>
+        <ul class="feedback-list">
+            {% for ex in p.examples %}
+            <li class="feedback-item">
+                <a class="ts jump-ts" data-t="{{ ex.ts_s }}" href="#">{{ ex.ts_label }}</a>
+                <span class="fb-quote">“{{ ex.quote | unescape_html }}”</span>
+            </li>
+            {% endfor %}
+        </ul>
+        <p class="fb-fix"><strong>Fix:</strong> {{ p.fix | unescape_html }}</p>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if transcript_json %}
+<section class="section">
+    {% if diarized and diarized.turns %}
+    {% set sp_index = {} %}
+    {% for t in diarized.turns %}{% if t.speaker not in sp_index %}{% set _ = sp_index.update({t.speaker: sp_index|length + 1}) %}{% endif %}{% endfor %}
+    <div class="sectionhead"><h2>Transcript ({{ diarized.turns|length }} turns)</h2></div>
+    <p class="blurb">Speakers identified by Sonnet. All content preserved including filler words.</p>
+    {% if diarized.ts_accurate %}
+    <p class="blurb muted small" style="margin-top:-4px;">Tap a timestamp to scrub the audio there.</p>
+    {% else %}
+    <p class="blurb muted small" style="margin-top:-4px;">Timestamps are approximate (no segment timing in this recording).</p>
+    {% endif %}
+    <ol class="transcript-turns">
+        {% for t in diarized.turns %}
+        <li class="transcript-turn"{% if t.start_s is defined %} data-start="{{ t.start_s }}"{% endif %}>
+            <span class="speaker speaker-{{ sp_index[t.speaker] }}">{{ t.speaker.replace('_', ' ') }}</span>
+            {% if t.start_s is defined %}<a class="turn-ts ts" data-t="{{ t.start_s }}" href="#">{{ t.start_s | mmss }}</a>{% endif %}
+            <span class="turn-text">{{ t.text }}</span>
+            {% if t.q_match %}
+            <details class="turn-note turn-note-question">
+                <summary>{{ icon('help') }} What they're really asking — matches a practice question</summary>
+                <p class="fb-why">→ {{ t.q_match.intent | unescape_html }}</p>
+                <a class="qmatch-link" href="{{ root_path }}/practice/{{ t.q_match.core_qid }}">{{ icon('sparkles') }} Practice: “{{ t.q_match.question }}”</a>
+            </details>
+            {% endif %}
+            {% if t.notes %}
+            {% for n in t.notes %}
+            <details class="turn-note turn-note-{{ n.kind }}">
+                <summary>{% if n.kind == 'worked' %}{{ icon('check') }}{% else %}{{ icon('warning') }}{% endif %} {{ n.title }}</summary>
+                <p class="fb-why">→ {{ n.note | unescape_html }}</p>
+            </details>
+            {% endfor %}
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ol>
+    {% elif transcript_json.segments %}
+    <div class="sectionhead"><h2>Transcript ({{ transcript_json.segments|length }} segments)</h2></div>
+    <p class="blurb">Click a timestamp to scrub the audio there.</p>
+    <ol class="segment-list">
+        {% for seg in transcript_json.segments %}
+        <li><a class="ts" data-t="{{ seg.start }}" href="#">[{{ seg.start | mmss }}]</a> {{ seg.text }}</li>
+        {% endfor %}
+    </ol>
+    {% else %}
+    <div class="sectionhead"><h2>Transcript</h2></div>
+    <p class="blurb">
+        {% if transcript_json.text %}{{ transcript_json.text|length }} chars · diarization not available, showing raw text.{% endif %}
+    </p>
+    <div class="generated-text" style="font-size: 14px; white-space: pre-wrap;">{{ transcript_json.text or "(empty)" }}</div>
+    {% endif %}
+</section>
+{% endif %}
+<script>
+document.querySelectorAll('.ts').forEach(el => {
+    el.addEventListener('click', e => {
+        e.preventDefault();
+        const t = parseFloat(el.dataset.t || '0');
+        const p = document.getElementById('player');
+        if (p) { p.currentTime = t; p.play(); }
+        // Scroll to the transcript turn whose start time is closest to (and
+        // not after) the clicked timestamp, then briefly highlight it.
+        let best = null, bestStart = -1;
+        document.querySelectorAll('.transcript-turn[data-start]').forEach(li => {
+            const s = parseFloat(li.dataset.start);
+            if (s <= t + 0.5 && s > bestStart) { bestStart = s; best = li; }
+        });
+        if (best) {
+            best.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            best.classList.add('turn-highlight');
+            setTimeout(() => best.classList.remove('turn-highlight'), 2200);
+        }
+    });
+});
+function copyText(targetId, btn) {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    const text = (el.innerText && el.innerText.trim()) ? el.innerText : (el.textContent || '');
+    const showCopied = () => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '✓ Copied';
+        setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(showCopied).catch(() => fallbackCopy(text, showCopied));
+    } else {
+        fallbackCopy(text, showCopied);
+    }
+}
+function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {}
+    document.body.removeChild(ta);
+}
+</script>
+{% endblock %}

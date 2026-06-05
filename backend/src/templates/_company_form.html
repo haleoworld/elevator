@@ -1,0 +1,66 @@
+{# Shared form partial. Caller sets form_action; defaults to /companies (add). #}
+<form method="post" action="{{ form_action or '/companies' }}" class="company-form">
+    <div class="formrow">
+        <label>Name
+            <input type="text" name="name" value="{{ company.name if company else '' }}" required maxlength="120">
+        </label>
+        <label>Slug
+            <input type="text" name="slug" value="{{ company.slug if company else '' }}" required pattern="[a-z0-9][a-z0-9-]*" maxlength="64"
+                   placeholder="lowercase-with-hyphens">
+        </label>
+    </div>
+    <div class="formrow">
+        <label>Segment
+            <input type="text" name="segment" value="{{ company.segment if company else '' }}" maxlength="60"
+                   placeholder="e.g. cloud-security, observability">
+        </label>
+        <label>Headcount band
+            <select name="headcount_band">
+                {% for b in headcount_bands %}
+                <option value="{{ b }}" {% if company and company.headcount_band == b %}selected{% endif %}>{{ b }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    <div class="formrow">
+        <label>Greenhouse slug
+            <input type="text" name="greenhouse_slug" value="{{ company.greenhouse_slug if company and company.greenhouse_slug else '' }}" maxlength="80"
+                   placeholder="boards.greenhouse.io/<this>">
+        </label>
+        <label>Lever slug
+            <input type="text" name="lever_slug" value="{{ company.lever_slug if company and company.lever_slug else '' }}" maxlength="80"
+                   placeholder="jobs.lever.co/<this>">
+        </label>
+    </div>
+    <label>Workday URL
+        <input type="text" name="workday_url" value="{{ company.workday_url if company and company.workday_url else '' }}" maxlength="200"
+               placeholder="https://<co>.wd5.myworkdayjobs.com/<board>">
+    </label>
+    <div class="formrow">
+        <label>Ashby slug
+            <input type="text" name="ashby_slug" value="{{ company.ashby_slug if company and company.ashby_slug else '' }}" maxlength="80"
+                   placeholder="jobs.ashbyhq.com/<this>">
+        </label>
+        <label>SmartRecruiters slug
+            <input type="text" name="smartrecruiters_slug" value="{{ company.smartrecruiters_slug if company and company.smartrecruiters_slug else '' }}" maxlength="80"
+                   placeholder="api.smartrecruiters.com/v1/companies/<this>/postings">
+        </label>
+    </div>
+    <label>Has Canada team?
+        <select name="has_canada_team">
+            <option value="" {% if not company or company.has_canada_team is none %}selected{% endif %}>Unknown</option>
+            <option value="yes" {% if company and company.has_canada_team == true %}selected{% endif %}>Yes</option>
+            <option value="no" {% if company and company.has_canada_team == false %}selected{% endif %}>No</option>
+        </select>
+    </label>
+    <label>Notes
+        <textarea name="notes" rows="3" placeholder="Optional context for future you.">{{ company.notes if company else '' }}</textarea>
+    </label>
+    <label class="checkbox">
+        <input type="checkbox" name="enabled" value="1" {% if not company or company.enabled %}checked{% endif %}>
+        Enabled (included in discovery)
+    </label>
+    <div class="actions">
+        <button type="submit">{{ submit_label or "Save" }}</button>
+    </div>
+</form>
