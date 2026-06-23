@@ -12,6 +12,21 @@
 <section class="section">
     <div class="sectionhead"><h2>The question</h2></div>
     <blockquote class="generated-text">{{ question.question }}</blockquote>
+    {% if question.asked_count %}
+    <p style="margin-top:8px;"><strong class="asked-badge">Asked {{ question.asked_count }}× across your interviews</strong></p>
+    {% if asked_in %}
+    <ul class="asked-list">
+        {% for a in asked_in %}
+        <li>
+            <a class="asked-link" href="{{ root_path }}/coaching/interview/{{ a.interview_id }}">
+                {{ a.title }}{% if a.count > 1 %} <span class="asked-x">({{ a.count }}×)</span>{% endif %}
+            </a>
+            {% if a.intent %}<p class="fb-why">→ {{ a.intent | unescape_html }}</p>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
     {% if question.variants %}
     <details class="variant-box" style="margin-top: 10px;" open>
         <summary>also asked as ({{ question.variants|length }})</summary>
@@ -103,6 +118,143 @@
     }
     tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.mode)));
     show(last);
+})();
+</script>
+
+{% set keyword_list = (question.keywords or '').split('\n') | map('trim') | select | list %}
+<div id="study-cards">
+    <section class="section">
+        <div class="sectionhead"><h2>Standard answer</h2></div>
+        <p class="blurb">Your rehearsable answer, grounded in your work history, career bio, and tone. Edit it any time — this is the version you keep sharpening.</p>
+        <form method="post" action="{{ root_path }}/practice/{{ question.id }}/standard-answer" class="company-form">
+            <textarea name="standard_answer" rows="10" placeholder="Write or generate the answer you want to rehearse for this question.">{{ question.standard_answer or '' }}</textarea>
+            <div class="actions">
+                <button type="submit">Save</button>
+                <button type="submit" formaction="{{ root_path }}/practice/{{ question.id }}/standard-answer/generate" class="secondary-btn">{{ icon('sparkles') }} Generate with AI</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="section">
+        <div class="sectionhead"><h2>Keywords</h2></div>
+        <p class="blurb">Short triggers distilled from your standard answer — for rehearsing on the go. Generate them, then flip through the flash cards.</p>
+        {% if keyword_list %}
+        <ul class="keyword-chips">
+            {% for k in keyword_list %}<li class="keyword-chip">{{ k }}</li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No keywords yet. Save a standard answer above, then generate keywords from it.</p>
+        {% endif %}
+        <div class="actions">
+            <form method="post" action="{{ root_path }}/practice/{{ question.id }}/keywords/generate" style="display:inline;">
+                <button type="submit" class="secondary-btn">{{ icon('sparkles') }} Generate keywords</button>
+            </form>
+            {% if keyword_list %}
+            <button type="button" class="secondary-btn" onclick="openFlashcards()">Show keyword flash cards</button>
+            {% endif %}
+        </div>
+    </section>
+</div>
+
+<div id="flashcards" hidden>
+    <div class="flashcards-bar">
+        <button type="button" class="secondary-btn" onclick="closeFlashcards()">← Done</button>
+        <span class="flashcards-count"><span id="fc-pos">1</span> / {{ keyword_list|length }}</span>
+    </div>
+    <div class="flashcard" id="flashcard" onclick="fcNext()">
+        <span class="flashcard-text" id="fc-text"></span>
+    </div>
+    <div class="flashcards-nav">
+        <button type="button" class="secondary-btn" onclick="event.stopPropagation(); fcPrev()">‹ Prev</button>
+        <button type="button" class="secondary-btn" onclick="event.stopPropagation(); fcNext()">Next ›</button>
+    </div>
+    <button type="button" id="float-rec" class="float-rec" onclick="toggleFloatRec()" aria-label="Record practice">
+        <span class="float-rec-dot"></span>
+    </button>
+    <div id="float-rec-timer" class="float-rec-timer" hidden></div>
+</div>
+
+<script>
+(function () {
+    const KW = {{ keyword_list | tojson }};
+    const UPLOAD_URL = "{{ root_path }}/practice/{{ question.id }}/record";
+    let idx = 0;
+    let recPhase = 'idle';   // idle -> recording -> uploading
+    let timerIv = null;
+
+    function render() {
+        document.getElementById('fc-text').textContent = KW[idx] || '';
+        document.getElementById('fc-pos').textContent = (idx + 1);
+    }
+    window.fcNext = function () { if (KW.length) { idx = (idx + 1) % KW.length; render(); } };
+    window.fcPrev = function () { if (KW.length) { idx = (idx - 1 + KW.length) % KW.length; render(); } };
+
+    window.openFlashcards = function () {
+        document.getElementById('study-cards').hidden = true;
+        document.getElementById('flashcards').hidden = false;
+        idx = 0; render();
+        document.body.classList.add('flashcards-open');
+    };
+    window.closeFlashcards = function () {
+        if (recPhase === 'recording') {
+            try { recStop('rec-prac'); recReset('rec-prac'); } catch (e) {}
+        }
+        resetRecBtn();
+        document.getElementById('flashcards').hidden = true;
+        document.getElementById('study-cards').hidden = false;
+        document.body.classList.remove('flashcards-open');
+    };
+
+    function resetRecBtn() {
+        recPhase = 'idle';
+        const btn = document.getElementById('float-rec');
+        btn.classList.remove('recording', 'uploading');
+        btn.innerHTML = '<span class="float-rec-dot"></span>';
+        const t = document.getElementById('float-rec-timer');
+        t.hidden = true; t.textContent = '';
+        if (timerIv) { clearInterval(timerIv); timerIv = null; }
+    }
+
+    window.toggleFloatRec = function () {
+        const btn = document.getElementById('float-rec');
+        const t = document.getElementById('float-rec-timer');
+        if (recPhase === 'idle') {
+            recStart('rec-prac', UPLOAD_URL);
+            recPhase = 'recording';
+            btn.classList.add('recording');
+            btn.innerHTML = '<span class="float-rec-square"></span>';
+            t.hidden = false;
+            timerIv = setInterval(() => {
+                const src = document.querySelector('[data-rec-timer]');
+                t.textContent = src ? src.textContent : '';
+            }, 250);
+        } else if (recPhase === 'recording') {
+            recStop('rec-prac');
+            recPhase = 'uploading';
+            btn.classList.remove('recording');
+            btn.classList.add('uploading');
+            btn.innerHTML = '…';
+            if (timerIv) { clearInterval(timerIv); timerIv = null; }
+            t.textContent = 'uploading…';
+            const wait = setInterval(() => {
+                if (window.recGetBlob && recGetBlob('rec-prac')) {
+                    clearInterval(wait);
+                    recUpload('rec-prac');   // navigates to the coaching report
+                }
+            }, 150);
+        }
+    };
+
+    // Swipe support on the flash card.
+    const card = document.getElementById('flashcard');
+    let startX = null;
+    card.addEventListener('touchstart', (e) => { startX = e.changedTouches[0].clientX; }, {passive: true});
+    card.addEventListener('touchend', (e) => {
+        if (startX === null) return;
+        const dx = e.changedTouches[0].clientX - startX;
+        if (Math.abs(dx) > 40) { if (dx < 0) fcNext(); else fcPrev(); }
+        startX = null;
+    }, {passive: true});
 })();
 </script>
 

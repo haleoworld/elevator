@@ -46,7 +46,7 @@
                        placeholder="e.g. 150000-200000 USD">
             </label>
             <label>Posted date
-                <input type="text" name="posted_date" maxlength="20" value="{{ j.posted_at[:10] if j.posted_at else '' }}" placeholder="YYYY-MM-DD">
+                <input type="text" name="posted_date" maxlength="20" value="{{ (j.posted_at|string)[:10] if j.posted_at else '' }}" placeholder="YYYY-MM-DD">
             </label>
         </div>
         <div class="formrow">

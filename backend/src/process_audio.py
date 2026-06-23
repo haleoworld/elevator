@@ -6,7 +6,10 @@ for re-processing (`python -m src.process_audio --interview-id N`).
 from __future__ import annotations
 
 import argparse
+import os
+import queue as _queue
 import sys
+import threading as _threading
 import traceback
 from pathlib import Path
 
@@ -16,6 +19,105 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
 from . import audio, coaching, db  # noqa: E402
+
+
+# ── Serialized processing queue ──────────────────────────────────────────────
+# Upload handlers call enqueue() and return immediately. A single daemon worker
+# drains the queue one job at a time, so concurrent uploads queue up instead of
+# colliding on the SQLite write lock or thrashing CPU with parallel Whisper runs.
+_job_queue: "_queue.Queue[tuple[str, int]]" = _queue.Queue()
+_worker_lock = _threading.Lock()
+_worker_started = False
+
+
+def _worker_loop() -> None:
+    while True:
+        kind, obj_id = _job_queue.get()
+        try:
+            if kind == "interview":
+                process_interview(obj_id)
+            elif kind == "practice":
+                process_practice(obj_id)
+        except Exception as e:  # noqa: BLE001 — keep the worker alive
+            print(f"[worker] {kind}:{obj_id} crashed: {e}", file=sys.stderr)
+        finally:
+            _job_queue.task_done()
+
+
+def _ensure_worker() -> None:
+    global _worker_started
+    with _worker_lock:
+        if not _worker_started:
+            _threading.Thread(target=_worker_loop, daemon=True,
+                              name="audio-worker").start()
+            _worker_started = True
+
+
+def enqueue(kind: str, obj_id: int) -> None:
+    """Queue an interview/practice job for the single background worker."""
+    _ensure_worker()
+    _job_queue.put((kind, obj_id))
+    print(f"[queue] enqueued {kind}:{obj_id} (depth={_job_queue.qsize()})")
+
+
+def resume_unprocessed() -> int:
+    """Re-queue any recording that has input (audio or text) but no transcript.
+    Called at startup so jobs interrupted by a restart finish on their own
+    instead of hanging in 'processing' forever."""
+    n = 0
+    with db.connect() as conn:
+        for r in conn.execute(
+            "SELECT id FROM interviews i "
+            "WHERE (i.audio_path IS NOT NULL OR i.notes IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.interview_id = i.id)"
+        ).fetchall():
+            enqueue("interview", r["id"]); n += 1
+        for r in conn.execute(
+            "SELECT id FROM practice_sessions s "
+            "WHERE (s.audio_path IS NOT NULL OR s.notes IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.practice_session_id = s.id)"
+        ).fetchall():
+            enqueue("practice", r["id"]); n += 1
+    if n:
+        print(f"[resume] re-queued {n} unprocessed recording(s) at startup")
+    return n
+
+
+def _notify_done(context: dict, interview_id, practice_session_id, *, ok: bool) -> None:
+    base = os.environ.get("ELEVATOR_DASHBOARD_URL", "http://localhost:8742").rstrip("/")
+    if interview_id is not None:
+        bits = [b for b in (context.get("company"), context.get("round")) if b]
+        title = " — ".join(bits) if bits else f"Interview #{interview_id}"
+        url = f"{base}/coaching/interview/{interview_id}"
+    else:
+        q = (context.get("question") or "").strip()
+        title = (q[:57] + "…") if len(q) > 58 else (q or f"Practice #{practice_session_id}")
+        url = f"{base}/coaching/practice/{practice_session_id}"
+    try:
+        from . import notifier
+        notifier.notify_processing_done(title, url, ok=ok)
+    except Exception as e:  # noqa: BLE001
+        print(f"[notify] failed (non-fatal): {e}")
+
+
+def _dedup_target(interview_id, practice_session_id) -> None:
+    """Keep only the newest transcript + report for this interview/session.
+    Runs after a successful pipeline so re-processing replaces a prior run
+    instead of accumulating duplicate rows."""
+    with db.connect() as conn:
+        if interview_id is not None:
+            col, val = "interview_id", interview_id
+        elif practice_session_id is not None:
+            col, val = "practice_session_id", practice_session_id
+        else:
+            return
+        for table in ("coaching_reports", "transcripts"):
+            conn.execute(
+                f"DELETE FROM {table} WHERE {col} = ? AND id < "
+                f"(SELECT MAX(id) FROM {table} WHERE {col} = ?)",
+                (val, val),
+            )
+        conn.commit()
 
 
 def process_interview(interview_id: int) -> None:
@@ -124,9 +226,11 @@ def _run_pipeline(
             transcript_id = cur.lastrowid
             conn.commit()
 
-        # Speaker diarization (interview only, when no segment-level timestamps
-        # exist — for segment-aware transcripts the per-segment text is enough).
-        if interview_id is not None and result.get("text") and not result.get("segments"):
+        # Speaker diarization (interview only). Always run it — the diarized
+        # speaker turns drive the transcript's speaker badges, inline coach
+        # notes, and question-match cards. Real per-segment timestamps (when
+        # present) are aligned to the turns at render time for accurate scrub.
+        if interview_id is not None and result.get("text"):
             print("[diarize] calling Sonnet to split into speaker turns")
             try:
                 turns, dz_usage = coaching.diarize_transcript(
@@ -200,9 +304,12 @@ def _run_pipeline(
             except Exception as e:
                 print(f"[qmatch] failed (non-fatal): {e}")
 
+        _dedup_target(interview_id, practice_session_id)
         print(f"[done] report saved to {report_path.name} (cost ${cost:.4f})")
+        _notify_done(context, interview_id, practice_session_id, ok=True)
     except Exception as e:
         print(f"[ERROR] {e}\n{traceback.format_exc()}", file=sys.stderr)
+        _notify_done(context, interview_id, practice_session_id, ok=False)
 
 
 def _json_dumps(x) -> str:

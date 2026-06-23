@@ -153,6 +153,62 @@ def _normalize(raw: dict, company_name: str, public_base: str) -> dict:
     }
 
 
+_PLACEHOLDER_LOC_RE = re.compile(r"^\d+\s+Locations?$", re.IGNORECASE)
+
+
+def _location_from_url(url: str) -> str | None:
+    """Workday job URLs encode the primary location in the path
+    (.../job/<Location>/<Title>_<JobId>). Decode it loosely (hyphens → spaces)
+    so the location filter can read it when the JSON only gives 'N Locations'."""
+    import urllib.parse
+    m = re.search(r"/job/([^/]+)/", url or "")
+    if not m:
+        return None
+    seg = urllib.parse.unquote(m.group(1)).replace("-", " ")
+    seg = re.sub(r"\s+", " ", seg).strip()
+    return seg or None
+
+
+def cxs_api_url(public_url: str) -> str | None:
+    """Convert a public Workday job URL
+    (https://sub.wdN.myworkdayjobs.com/board/job/...) to its cxs detail-API
+    endpoint (https://sub.wdN.myworkdayjobs.com/wday/cxs/<tenant>/<board>/job/...)."""
+    m = re.match(
+        r"^(https?://[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com)"
+        r"(?:/(?:en-US|en-GB|en-CA))?"
+        r"/([^/]+)(/job/.+)$",
+        public_url or "",
+    )
+    if m is None:
+        return None
+    origin, board, job_path = m.group(1), m.group(2), m.group(3)
+    sub_m = re.match(r"^https?://([a-z0-9-]+)\.", origin)
+    if sub_m is None:
+        return None
+    return f"{origin}/wday/cxs/{sub_m.group(1)}/{board}{job_path}"
+
+
+def posting_gone(public_url: str, *, client: httpx.Client | None = None) -> bool:
+    """True only when the Workday requisition's detail API reports it removed
+    (403/404/410). Network errors return False so a transient hiccup never
+    prunes a live posting."""
+    api = cxs_api_url(public_url)
+    if not api:
+        return False
+    owns = client is None
+    if owns:
+        client = httpx.Client(timeout=10.0)
+    try:
+        r = client.get(api, headers={"Accept": "application/json",
+                                     "User-Agent": "elevator/1.0 (personal use)"})
+        return r.status_code in (403, 404, 410)
+    except httpx.HTTPError:
+        return False
+    finally:
+        if owns:
+            client.close()
+
+
 def fetch_detail(public_url: str, *, client: httpx.Client | None = None) -> dict:
     """Fetch a single job's full Workday detail and extract structured fields.
 
@@ -161,26 +217,11 @@ def fetch_detail(public_url: str, *, client: httpx.Client | None = None) -> dict
     screen.py for jobs that passed Phase 2 — saves hundreds of detail calls
     on jobs that would be dropped anyway.
     """
-    # Convert public URL like
-    #   https://sub.wd5.myworkdayjobs.com/board/job/...
-    # to the API detail endpoint
-    #   https://sub.wd5.myworkdayjobs.com/wday/cxs/<tenant>/<board>/job/...
     empty = {"jd_text": "", "remote_type": None, "job_type": None,
              "location": None, "posted_at": None}
-    m = re.match(
-        r"^(https?://[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com)"
-        r"(?:/(?:en-US|en-GB|en-CA))?"
-        r"/([^/]+)(/job/.+)$",
-        public_url,
-    )
-    if m is None:
+    api_url = cxs_api_url(public_url)
+    if api_url is None:
         return empty
-    origin, board, job_path = m.group(1), m.group(2), m.group(3)
-    sub_m = re.match(r"^https?://([a-z0-9-]+)\.", origin)
-    if sub_m is None:
-        return empty
-    tenant = sub_m.group(1)
-    api_url = f"{origin}/wday/cxs/{tenant}/{board}{job_path}"
 
     owns_client = client is None
     if owns_client:
@@ -221,6 +262,14 @@ def fetch_detail(public_url: str, *, client: httpx.Client | None = None) -> dict
     seen: set[str] = set()
     locs = [x for x in locs if not (x in seen or seen.add(x))]
     location = "; ".join(locs) if locs else None
+
+    # Some tenants put an "N Locations" placeholder in the JSON too. The job URL
+    # path reliably encodes the primary location (.../job/<Location>/<title>...),
+    # so fall back to that for the location filter.
+    if (not location) or _PLACEHOLDER_LOC_RE.match(location):
+        url_loc = _location_from_url(public_url)
+        if url_loc:
+            location = url_loc
 
     # postedOn is usually relative ("Posted Yesterday") — useless.
     # startDate is sometimes a real ISO timestamp; pass it through to caller.

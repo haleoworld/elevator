@@ -181,7 +181,26 @@ CREATE TABLE IF NOT EXISTS app_meta (
     value       TEXT,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- One row per auto-triggered discovery/serpapi run — for the activity history.
+CREATE TABLE IF NOT EXISTS discovery_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source      TEXT NOT NULL,            -- 'discovery' | 'serpapi'
+    new_jobs    INTEGER DEFAULT 0,        -- brand-new postings found this run
+    new_passed  INTEGER DEFAULT 0         -- of those, how many passed the filter
+);
 """
+
+
+def record_run(source: str, new_jobs: int, new_passed: int) -> None:
+    """Log one auto-triggered discovery/serpapi run for the activity history."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO discovery_runs (source, new_jobs, new_passed) VALUES (?, ?, ?)",
+            (source, int(new_jobs or 0), int(new_passed or 0)),
+        )
+        conn.commit()
 
 
 def connect() -> sqlite3.Connection:
@@ -197,6 +216,13 @@ def connect() -> sqlite3.Connection:
     # Belt-and-suspenders C-level timeout (milliseconds). When the DB is busy,
     # SQLite retries internally for this long before raising OperationalError.
     conn.execute("PRAGMA busy_timeout = 30000")
+    # Acquire the write lock at BEGIN (BEGIN IMMEDIATE) rather than lazily on the
+    # first write. A deferred transaction that reads (SELECT) then writes can hit
+    # an unretryable SQLITE_BUSY_SNAPSHOT when another connection writes in
+    # between (e.g. a soft-delete during a background screening run). Taking the
+    # write lock up front makes busy_timeout govern the wait instead of failing.
+    # Set after the PRAGMAs so journal_mode=WAL runs outside any transaction.
+    conn.isolation_level = "IMMEDIATE"
     return conn
 
 
@@ -216,6 +242,8 @@ def init() -> None:
             "ALTER TABLE transcripts ADD COLUMN duration_s REAL",
             "ALTER TABLE coaching_reports ADD COLUMN question_matches_json TEXT",
             "ALTER TABLE practice_questions ADD COLUMN core_id INTEGER REFERENCES practice_questions(id)",
+            "ALTER TABLE practice_questions ADD COLUMN standard_answer TEXT",
+            "ALTER TABLE practice_questions ADD COLUMN keywords TEXT",
         ):
             try:
                 conn.execute(migration)

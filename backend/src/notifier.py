@@ -116,6 +116,34 @@ def notify_filter_pass(passed_count: int, dashboard_url: str) -> tuple[bool, str
     return ok, status
 
 
+def notify_serpapi(count: int, dashboard_url: str) -> tuple[bool, str]:
+    """Separate nightly ping for the broad (SerpAPI) discovery run."""
+    if count < 1:
+        return False, "no new SerpAPI jobs; skipping"
+    plural = "s" if count != 1 else ""
+    text = (
+        f"🔎 *{count} new job{plural} from broad search (SerpAPI)* in the Passed tab.\n\n"
+        f"Review: {dashboard_url}"
+    )
+    ok, status = send_message(text)
+    _log("telegram", "serpapi", str(count), ok)
+    return ok, status
+
+
+def notify_processing_done(title: str, dashboard_url: str, *, ok: bool = True) -> tuple[bool, str]:
+    """Ping when an interview/practice recording finishes (or fails) processing."""
+    if ok:
+        text = f"✅ Done processing: *{title}*\n\nView the report: {dashboard_url}"
+    else:
+        text = (
+            f"⚠️ Processing *failed* for: *{title}*\n\n"
+            f"It won't finish on its own — re-upload or reprocess. {dashboard_url}"
+        )
+    sent, status = send_message(text)
+    _log("telegram", "processing_done" if ok else "processing_failed", title, sent)
+    return sent, status
+
+
 def notify_batch_ready(batch_id: int, jobs: list[dict], dashboard_url: str) -> tuple[bool, str]:
     """Send a Markdown summary of the ready batch."""
     if not jobs:

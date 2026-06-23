@@ -16,7 +16,7 @@ import re
 
 import anthropic
 
-from . import db, profile_store
+from . import db, filter as _rules_filter, profile_store
 from .discovery import workday as _workday  # for lazy Workday JD fetch
 
 MODEL = "claude-haiku-4-5"
@@ -428,31 +428,60 @@ def run(*, limit: int | None = None, job_ids: list[int] | None = None) -> dict:
             if not (job.get("jd_text") or "").strip() and "myworkdayjobs.com" in (job.get("url") or ""):
                 from .discovery.persist import _normalize_timestamp  # noqa: E402
                 detail = _workday.fetch_detail(job["url"])
+                # Resolve the real location independently of jd_text: the list
+                # view shows an "N Locations" placeholder that the Phase-2 filter
+                # can't evaluate, and the detail call may resolve the city even
+                # when JD-text extraction fails.
+                updates: dict = {}
+                new_loc = detail.get("location")
+                cur_loc = (job.get("location") or "").strip()
+                if new_loc and (not cur_loc or re.match(r"^\d+\s+Locations?$", cur_loc, re.IGNORECASE)):
+                    updates["location"] = new_loc
                 if detail.get("jd_text"):
-                    job["jd_text"] = detail["jd_text"]
-                    # Build the UPDATE only for fields where the current row
-                    # is empty/null OR is the unhelpful "N Locations" label.
-                    updates: dict = {"jd_text": detail["jd_text"]}
+                    updates["jd_text"] = detail["jd_text"]
                     if detail.get("remote_type") and not job.get("remote_type"):
                         updates["remote_type"] = detail["remote_type"]
-                    new_loc = detail.get("location")
-                    cur_loc = (job.get("location") or "").strip()
-                    if new_loc and (not cur_loc or re.match(r"^\d+\s+Locations?$", cur_loc, re.IGNORECASE)):
-                        updates["location"] = new_loc
                     if detail.get("posted_at") and not job.get("posted_at"):
                         norm = _normalize_timestamp(detail["posted_at"])
                         if norm:
                             updates["posted_at"] = norm
+                if updates:
                     set_clause = ", ".join(f"{k} = ?" for k in updates)
                     conn.execute(
                         f"UPDATE jobs SET {set_clause} WHERE id = ?",
                         (*updates.values(), job["id"]),
                     )
                     conn.commit()
-                    # Reflect changes onto in-memory job dict so the LLM sees them.
                     for k, v in updates.items():
-                        if k != "jd_text":
-                            job[k] = v
+                        job[k] = v
+
+            # If the location is still an "N Locations" placeholder (or empty),
+            # derive the primary city from the Workday URL path — reliable even
+            # when the detail fetch fails or also returns the placeholder.
+            cur = (job.get("location") or "").strip()
+            if (not cur or re.match(r"^\d+\s+Locations?$", cur, re.IGNORECASE)) \
+                    and "myworkdayjobs.com" in (job.get("url") or ""):
+                url_loc = _workday._location_from_url(job["url"])
+                if url_loc and url_loc != cur:
+                    job["location"] = url_loc
+                    conn.execute("UPDATE jobs SET location = ? WHERE id = ?",
+                                 (url_loc, job["id"]))
+                    conn.commit()
+
+            # Re-apply the location gate now that the real city is known — drops
+            # multi-location Workday postings that turn out to be non-Canada
+            # (they sailed past Phase-2 with an "N Locations" placeholder).
+            loc_reason = _rules_filter.location_disqualified(job.get("location"))
+            if loc_reason:
+                conn.execute(
+                    "UPDATE jobs SET filter_status = 'dropped', drop_reason = ?, "
+                    "stage = 'filtered' WHERE id = ?",
+                    (loc_reason, job["id"]),
+                )
+                conn.commit()
+                stats["dropped_location"] = stats.get("dropped_location", 0) + 1
+                continue  # skip the (paid) LLM screen for an out-of-scope job
+
             result = _score_one(client, job, system)
             if result is None:
                 stats["errors"] += 1

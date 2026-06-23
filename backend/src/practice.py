@@ -66,10 +66,79 @@ def list_questions() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def interview_ask_counts() -> dict[int, int]:
+    """Map core_question_id -> how many times that core (or any of its variant
+    phrasings) was asked across all interviews, per the question-match records."""
+    import json as _json
+    counts: dict[int, int] = {}
+    with db.connect() as conn:
+        rows = conn.execute("SELECT id, core_id FROM practice_questions").fetchall()
+        core_of_id = {r["id"]: (r["core_id"] or r["id"]) for r in rows}
+        for r in conn.execute(
+            "SELECT cr.question_matches_json FROM coaching_reports cr "
+            "WHERE cr.interview_id IS NOT NULL AND cr.question_matches_json IS NOT NULL "
+            "AND cr.id = (SELECT MAX(c2.id) FROM coaching_reports c2 "
+            "             WHERE c2.interview_id = cr.interview_id)"
+        ).fetchall():
+            try:
+                matches = _json.loads(r["question_matches_json"] or "[]")
+            except (_json.JSONDecodeError, TypeError):
+                continue
+            for m in matches:
+                cid = core_of_id.get(m.get("practice_question_id"))
+                if cid is not None:
+                    counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
+def interview_asks_for_core(core_id: int) -> list[dict]:
+    """Interviews where this core (or one of its variants) was asked, newest
+    first. Returns [{interview_id, title, occurred_at, count, intent}]."""
+    import json as _json
+    with db.connect() as conn:
+        member_ids = {core_id}
+        for r in conn.execute(
+            "SELECT id FROM practice_questions WHERE core_id = ?", (core_id,)
+        ).fetchall():
+            member_ids.add(r["id"])
+        rows = conn.execute(
+            "SELECT cr.interview_id, cr.question_matches_json, "
+            "i.company, i.round, i.interview_date, i.name, i.occurred_at "
+            "FROM coaching_reports cr JOIN interviews i ON i.id = cr.interview_id "
+            "WHERE cr.interview_id IS NOT NULL AND cr.question_matches_json IS NOT NULL "
+            "AND cr.id = (SELECT MAX(c2.id) FROM coaching_reports c2 "
+            "             WHERE c2.interview_id = cr.interview_id) "
+            "ORDER BY i.occurred_at DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            matches = _json.loads(r["question_matches_json"] or "[]")
+        except (_json.JSONDecodeError, TypeError):
+            continue
+        hits = [m for m in matches if m.get("practice_question_id") in member_ids]
+        if not hits:
+            continue
+        if r["name"]:
+            title = r["name"]
+        else:
+            bits = [b for b in (r["company"], r["round"], r["interview_date"]) if b]
+            title = " — ".join(bits) if bits else f"Interview #{r['interview_id']}"
+        out.append({
+            "interview_id": r["interview_id"],
+            "title": title,
+            "occurred_at": r["occurred_at"],
+            "count": len(hits),
+            "intent": (hits[0].get("intent") or "").strip(),
+        })
+    return out
+
+
 def list_cores() -> list[dict]:
     """Core (non-variant) questions, each with its nested variant phrasings.
     Practice attaches to the core, so attempt counts are the core's own."""
     seed_if_empty()
+    ask_counts = interview_ask_counts()
     with db.connect() as conn:
         cores = conn.execute(
             "SELECT q.id, q.category, q.question, "
@@ -81,6 +150,7 @@ def list_cores() -> list[dict]:
         out = []
         for c in cores:
             d = dict(c)
+            d["asked_count"] = ask_counts.get(c["id"], 0)
             d["variants"] = [
                 dict(v) for v in conn.execute(
                     "SELECT id, question, category FROM practice_questions "
@@ -134,6 +204,21 @@ def set_question_text(question_id: int, text: str) -> None:
         conn.commit()
 
 
+def set_standard_answer(question_id: int, text: str) -> None:
+    with db.connect() as conn:
+        conn.execute("UPDATE practice_questions SET standard_answer = ? WHERE id = ?",
+                     ((text or "").strip(), question_id))
+        conn.commit()
+
+
+def set_keywords(question_id: int, keywords: str) -> None:
+    """Store keywords as a newline-separated string."""
+    with db.connect() as conn:
+        conn.execute("UPDATE practice_questions SET keywords = ? WHERE id = ?",
+                     ((keywords or "").strip(), question_id))
+        conn.commit()
+
+
 _VALID_CATEGORIES = {"behavioral", "technical", "system_design", "fe_specific", "personal"}
 
 
@@ -163,7 +248,8 @@ def create_question(question: str, category: str = "behavioral",
 def get_question(question_id: int) -> dict | None:
     with db.connect() as conn:
         row = conn.execute(
-            "SELECT id, category, question, core_id FROM practice_questions WHERE id = ?",
+            "SELECT id, category, question, core_id, standard_answer, keywords "
+            "FROM practice_questions WHERE id = ?",
             (question_id,),
         ).fetchone()
         if row is None:
@@ -176,7 +262,8 @@ def get_question(question_id: int) -> dict | None:
                 (question_id,),
             ).fetchall()
         ]
-        return d
+    d["asked_count"] = interview_ask_counts().get(d.get("core_id") or d["id"], 0)
+    return d
 
 
 def create_session(question_id: int, audio_path: str) -> int:

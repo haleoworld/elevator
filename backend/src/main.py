@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,8 +27,8 @@ load_dotenv(REPO_ROOT / ".env")
 from datetime import datetime  # noqa: E402
 
 from . import (  # noqa: E402 — must come after load_dotenv
-    audio, auth, batches, companies_store, content, db, health,
-    notifier, practice, process_audio, profile_store, screen,
+    answer_gen, audio, auth, batches, companies_store, content, db, health,
+    jmc_bridge, notifier, practice, process_audio, profile_store, screen,
 )
 import threading  # noqa: E402
 import uuid  # noqa: E402
@@ -151,6 +151,8 @@ app.mount("/static", StaticFiles(directory=str(SRC_DIR / "static")), name="stati
 def _startup() -> None:
     db.init()
     auth.init_password()
+    # Recover any recording left unprocessed by a prior crash/restart.
+    process_audio.resume_unprocessed()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -401,6 +403,7 @@ DISCOVERY_PIDFILE = REPO_ROOT / "data" / "discovery.pid"
 DISCOVERY_LOG = REPO_ROOT / "logs" / "discovery.log"
 SCREEN_PIDFILE = REPO_ROOT / "data" / "screen.pid"
 SCREEN_LOG = REPO_ROOT / "logs" / "screen.log"
+EXPIRE_LOG = REPO_ROOT / "logs" / "expire.log"
 
 
 @app.post("/jobs/run-discovery")
@@ -453,6 +456,41 @@ def jobs_run_screen(request: Request):
         )
     SCREEN_PIDFILE.write_text(str(proc.pid))
     return RedirectResponse(url=_rp("/jobs?started=screen-started"), status_code=303)
+
+
+@app.post("/jobs/prune-expired")
+def jobs_prune_expired(request: Request):
+    """Check active jobs' postings and drop any whose listing was removed."""
+    if (r := auth.require_login(request)) is not None:
+        return r
+    import subprocess
+    EXPIRE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(EXPIRE_LOG, "ab") as logf:
+        logf.write(f"\n\n==== {datetime.now().isoformat()} prune started ====\n".encode())
+        subprocess.Popen(
+            [str(REPO_ROOT / ".venv" / "bin" / "python"), "-m", "src.expire"],
+            cwd=str(REPO_ROOT), stdout=logf, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return RedirectResponse(url=_rp("/jobs?started=prune-started"), status_code=303)
+
+
+@app.post("/jobs/run-serpapi")
+def jobs_run_serpapi(request: Request):
+    """TEST: broad keyword discovery via SerpAPI Google Jobs. Results land in
+    the Passed tab (bypassing the curated-company gate) for quality review."""
+    if (r := auth.require_login(request)) is not None:
+        return r
+    from .discovery import serpapi as _serp
+    if not _serp.key_configured():
+        raise HTTPException(status_code=400,
+                            detail="SERPAPI_KEY not set in backend/.env — add it and retry.")
+    try:
+        res = _serp.run_test()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"SerpAPI error: {e}")
+    return RedirectResponse(
+        url=_rp(f"/jobs?tab=passed&saved=serpapi-{res['inserted']}"), status_code=303)
 
 
 def _job_run_status(pidfile, logfile, *, label: str) -> dict | None:
@@ -516,6 +554,17 @@ def _score_class(score: int) -> str:
     return "score-poor"
 
 
+# How a job entered the system, derived from its `source`. Discovery scrapers
+# (workday/greenhouse/lever/ashby/adzuna/smartrecruiters) all read as "Discovery".
+_INTAKE_LABELS = {"serpapi": "SerpAPI", "manual": "Paste", "shortcut": "Shortcut"}
+
+
+def _intake_label(source: str | None) -> str:
+    if not source:
+        return "—"
+    return _INTAKE_LABELS.get(source, "Discovery")
+
+
 @app.post("/jobs/bulk-delete")
 async def jobs_bulk_delete(request: Request):
     """Soft-delete selected jobs. Auto-purged after 5 days."""
@@ -553,6 +602,58 @@ async def jobs_bulk_delete(request: Request):
             )
         conn.commit()
     return RedirectResponse(url=_rp(f"/jobs?saved=deleted-{cur.rowcount}"), status_code=303)
+
+
+@app.post("/jobs/bulk-move-batch")
+async def jobs_bulk_move_batch(request: Request):
+    """Move selected batched jobs into another batch."""
+    if (r := auth.require_login(request)) is not None:
+        return r
+    form = await request.form()
+    ids = [int(x) for x in form.getlist("job_ids") if x.isdigit()]
+    target = (form.get("target_batch_id") or "").strip()
+    tab = form.get("tab") or "batched"
+    if not ids or not target.isdigit():
+        return RedirectResponse(url=_rp(f"/jobs?tab={tab}&saved=moved-0"), status_code=303)
+    n = batches.move_jobs(ids, int(target))
+    return RedirectResponse(url=_rp(f"/jobs?tab={tab}&saved=moved-{n}"), status_code=303)
+
+
+@app.post("/jobs/send-to-jmc")
+async def jobs_send_to_jmc(request: Request):
+    """Push selected batched jobs into the jmc app, into a batch matched by the
+    job's elevator batch name (created in jmc if missing)."""
+    if (r := auth.require_login(request)) is not None:
+        return r
+    form = await request.form()
+    ids = [int(x) for x in form.getlist("job_ids") if x.isdigit()]
+    tab = form.get("tab") or "batched"
+    if not ids:
+        return RedirectResponse(url=_rp(f"/jobs?tab={tab}&jmc=none"), status_code=303)
+    ph = ",".join("?" * len(ids))
+    with db.connect() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT j.id, j.company, j.title, j.url, j.location, j.jd_text, "
+            "       j.salary_min, j.salary_max, j.salary_currency, j.remote_type, "
+            "       j.job_type, j.reference_id, j.posted_at, b.name AS batch_name "
+            "FROM jobs j JOIN batch_jobs bj ON bj.job_id = j.id "
+            "JOIN batches b ON b.id = bj.batch_id "
+            f"WHERE j.id IN ({ph}) AND j.deleted_at IS NULL", ids,
+        )]
+    jobs_by_batch: dict[str, list[dict]] = {}
+    for row in rows:
+        jobs_by_batch.setdefault(row["batch_name"], []).append(row)
+    if not jobs_by_batch:
+        return RedirectResponse(url=_rp(f"/jobs?tab={tab}&jmc=none"), status_code=303)
+    try:
+        s = jmc_bridge.send_jobs(jobs_by_batch)
+    except Exception as e:
+        print(f"  jmc send failed: {e}")
+        return RedirectResponse(url=_rp(f"/jobs?tab={tab}&jmc=error"), status_code=303)
+    msg = f"added-{s['added']}-skipped-{s['skipped']}"
+    if s["created_batches"]:
+        msg += "-new-" + str(len(s["created_batches"]))
+    return RedirectResponse(url=_rp(f"/jobs?tab={tab}&jmc={msg}"), status_code=303)
 
 
 @app.post("/jobs/bulk-restore")
@@ -663,8 +764,12 @@ async def jobs_delete_all(request: Request):
 @app.get("/jobs", response_class=HTMLResponse)
 def jobs_view(request: Request, tab: str = "scored",
               q_company: str = "", q_reason: str = "",
-              q_min_fit: str = "", q_min_ats: str = "",
-              q_fe: str = "", q_location: str = ""):
+              q_fit: list[str] = Query(default=[]),
+              q_role: list[str] = Query(default=[]),
+              q_co: list[str] = Query(default=[]),
+              q_fe_pct: list[str] = Query(default=[]),
+              q_min_ats: str = "", q_fe: str = "", q_location: str = "",
+              q_batch: str = ""):
     if (r := auth.require_login(request)) is not None:
         return r
     if tab not in ("scored", "passed", "dropped", "batched", "deleted"):
@@ -697,17 +802,8 @@ def jobs_view(request: Request, tab: str = "scored",
                 else:
                     q += "AND drop_reason = ? "
                     params.append(q_reason)
-            # Fit-score tier filter — buckets match the deterministic formula's tiers.
-            if q_min_fit == "no_score":
-                q += "AND fit_score IS NULL "
-            elif q_min_fit == "apply":      # 70+
-                q += "AND fit_score >= 70 "
-            elif q_min_fit == "transition": # 66-69
-                q += "AND fit_score BETWEEN 66 AND 69 "
-            elif q_min_fit == "practice":   # 40-65
-                q += "AND fit_score BETWEEN 40 AND 65 "
-            elif q_min_fit == "drop":       # <40 (excluding NULL — that's "no_score")
-                q += "AND fit_score IS NOT NULL AND fit_score < 40 "
+            # Fit / role-fit / co-fit tier filters run in Python after scoring
+            # (role_fit & co_fit are computed there), so nothing here for them.
             if q_min_ats == "no_score":
                 q += "AND ats_score IS NULL "
             elif q_min_ats and q_min_ats.isdigit():
@@ -720,12 +816,15 @@ def jobs_view(request: Request, tab: str = "scored",
             if q_location:
                 q += "AND LOWER(COALESCE(location, '')) LIKE ? "
                 params.append(f"%{q_location.lower()}%")
+            if q_batch.isdigit():
+                q += "AND id IN (SELECT job_id FROM batch_jobs WHERE batch_id = ?) "
+                params.append(int(q_batch))
             return q
 
         SELECT_COLS = (
             "id, company, title, location, fit_score, ats_score, "
             "filter_status, drop_reason, deleted_at, jd_text, "
-            "posted_at, discovered_at, job_board, stage, "
+            "posted_at, discovered_at, job_board, stage, source, "
             "(SELECT bj.batch_id FROM batch_jobs bj WHERE bj.job_id = jobs.id LIMIT 1) AS batch_id, "
             "(SELECT b.name FROM batch_jobs bj JOIN batches b ON b.id = bj.batch_id "
             " WHERE bj.job_id = jobs.id LIMIT 1) AS batch_name, "
@@ -781,6 +880,7 @@ def jobs_view(request: Request, tab: str = "scored",
             return round(sum(xs) / len(xs)) if xs else None
         for d in rows:
             d["score_class"] = _score_class(d.get("fit_score") or 0)
+            d["intake"] = _intake_label(d.get("source"))
             # Role fit = avg(tech_stack, fe_be_breakdown, requirements, role_expectations)
             d["role_fit"] = _avg(d.get("p_tech"), d.get("p_febr"),
                                   d.get("p_req"),  d.get("p_role"))
@@ -794,6 +894,26 @@ def jobs_view(request: Request, tab: str = "scored",
             d["fe_share"] = jd_analyzer.analyze(jd).get("frontend_split") if jd else None
             # Drop the heavy jd_text field before template rendering — we got what we needed
             d.pop("jd_text", None)
+
+        # Tier post-filters (multi-select). fit/role/co share the same buckets.
+        def _tier_of(s):
+            if s is None: return "none"
+            if s >= 70: return "apply"
+            if s >= 66: return "transition"
+            if s >= 40: return "practice"
+            return "drop"
+        if q_fit:
+            rows = [d for d in rows if _tier_of(d.get("fit_score")) in q_fit]
+        if q_role:
+            rows = [d for d in rows if _tier_of(d.get("role_fit")) in q_role]
+        if q_co:
+            rows = [d for d in rows if _tier_of(d.get("company_fit")) in q_co]
+        if q_fe_pct:
+            def _fe_ok(fs):
+                if fs is None: return "none" in q_fe_pct
+                if fs >= 50:   return "high" in q_fe_pct
+                return "low" in q_fe_pct
+            rows = [d for d in rows if _fe_ok(d.get("fe_share"))]
 
         scored = rows if tab == "scored" else []
         passed_not_scored = rows if tab == "passed" else []
@@ -814,14 +934,19 @@ def jobs_view(request: Request, tab: str = "scored",
             "drop_reasons": drop_reasons,
             "q_company": q_company,
             "q_reason": q_reason,
-            "q_min_fit": q_min_fit,
+            "q_fit": q_fit,
+            "q_role": q_role,
+            "q_co": q_co,
+            "q_fe_pct": q_fe_pct,
             "q_min_ats": q_min_ats,
             "q_fe": q_fe,
             "q_location": q_location,
+            "q_batch": q_batch,
             "purged_n": purged_n,
             "discovery_status": _discovery_status(),
             "screen_status": _screen_status(),
-            "batch_options": batches.list_batch_options() if tab == "scored" else [],
+            "serpapi_configured": bool(os.environ.get("SERPAPI_KEY", "").strip()),
+            "batch_options": batches.list_batch_options() if tab in ("scored", "batched") else [],
             "totals": {
                 "all": totals_row["all_"] or 0,
                 "passed_unscored": totals_row["passed_unscored"] or 0,
@@ -1015,7 +1140,7 @@ def telegram_register_post(request: Request):
         return r
     cid, status = notifier.register_from_updates()
     return RedirectResponse(
-        url=f"/telegram/register?status={status}&chat_id={cid or ''}",
+        url=_rp(f"/telegram/register?status={status}&chat_id={cid or ''}"),
         status_code=303,
     )
 
@@ -1026,7 +1151,7 @@ def telegram_test(request: Request):
         return r
     ok, status = notifier.send_message("Elevator test ping ✅", parse_mode="")
     return RedirectResponse(
-        url=f"/telegram/register?status={status}", status_code=303
+        url=_rp(f"/telegram/register?status={status}"), status_code=303
     )
 
 
@@ -1292,6 +1417,106 @@ def jobs_paste_submit(
     return RedirectResponse(url=_rp(f"/jobs/{job_id}?manual_saved=1"), status_code=303)
 
 
+@app.post("/jobs/ingest")
+async def jobs_ingest(request: Request):
+    """Token-protected ingest for the iOS Shortcut / bookmarklet. The client
+    sends the already-rendered page text from the user's logged-in browser, so
+    bot-blocked sites (LinkedIn, Indeed, etc.) are captured client-side. We clean
+    it with Haiku, upsert the job, and screen it. Auth is by INGEST_TOKEN, not
+    session (the request comes from a Shortcut, not the browser session)."""
+    expected = (os.environ.get("INGEST_TOKEN") or "").strip()
+    form = await request.form()
+    token = (form.get("token") or request.query_params.get("token") or "").strip()
+    if not expected or token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    url_clean = (form.get("url") or "").strip()
+    page_title = (form.get("page_title") or "").strip()
+    page_text = (form.get("page_text") or "").strip()
+    if not url_clean:
+        return JSONResponse({"ok": False, "error": "url required"}, status_code=400)
+    if len(page_text) < 80:
+        return JSONResponse(
+            {"ok": False, "error": "no_jd",
+             "message": "Couldn't read a job description from this page. Open the JD in Safari (not the app), or paste the text manually."},
+            status_code=422)
+
+    from . import jd_parse  # noqa: E402
+    try:
+        f = jd_parse.clean_page(page_text, url=url_clean, page_title=page_title)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"parse_failed: {e}"}, status_code=500)
+
+    jd_text_clean = (f.get("jd_text") or "").strip() or None
+    if not jd_text_clean:
+        return JSONResponse(
+            {"ok": False, "error": "no_jd",
+             "message": "No job description found on that page. Make sure the full JD is visible, then try again."},
+            status_code=422)
+
+    import hashlib
+    eid = "manual-" + hashlib.sha256(url_clean.encode("utf-8")).hexdigest()[:32]
+    company_clean = (f.get("company") or "").strip() or "(unknown)"
+    title_clean = (f.get("title") or "").strip() or "(no title yet)"
+    posted_at_clean = _parse_iso_date(f.get("posted_date") or "")
+    sal_min = f.get("salary_min") or None
+    sal_max = f.get("salary_max") or None
+    sal_cur = (f.get("salary_currency") or "").strip() or None
+
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT id, jd_text FROM jobs WHERE source='shortcut' AND external_id=?",
+            (eid,),
+        ).fetchone()
+        if existing is None:
+            cur = conn.execute(
+                "INSERT INTO jobs (source, external_id, company, title, location, "
+                "remote_type, job_type, salary_min, salary_max, salary_currency, "
+                "posted_at, reference_id, job_board, url, jd_text, stage, filter_status) "
+                "VALUES ('shortcut', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'filtered', 'passed')",
+                (eid, company_clean, title_clean, (f.get("location") or "").strip() or None,
+                 (f.get("work_arrangement") or "").strip() or None,
+                 (f.get("job_type") or "").strip() or None,
+                 sal_min, sal_max, sal_cur, posted_at_clean,
+                 (f.get("reference_id") or "").strip() or None,
+                 (f.get("job_board") or "").strip() or None,
+                 url_clean, jd_text_clean),
+            )
+            job_id = cur.lastrowid
+            had_jd_before = False
+        else:
+            job_id = existing["id"]
+            had_jd_before = bool((existing["jd_text"] or "").strip())
+            conn.execute(
+                "UPDATE jobs SET "
+                "  company  = CASE WHEN ? != '(unknown)'      THEN ? ELSE company END, "
+                "  title    = CASE WHEN ? != '(no title yet)' THEN ? ELSE title   END, "
+                "  location = COALESCE(?, location), jd_text = ?, "
+                "  filter_status='passed', stage='filtered', deleted_at=NULL "
+                "WHERE id = ?",
+                (company_clean, company_clean, title_clean, title_clean,
+                 (f.get("location") or "").strip() or None, jd_text_clean, job_id),
+            )
+        conn.commit()
+
+    # Ingest is a deliberate "score this for me" action, so always (re)screen —
+    # whether the row is new or an existing one being refreshed.
+    def _screen():
+        screen.run(job_ids=[job_id])
+    import threading as _th
+    _th.Thread(target=_screen, daemon=True).start()
+
+    prefix = request.scope.get("root_path", "")
+    return JSONResponse({
+        "ok": True,
+        "job_id": job_id,
+        "company": company_clean,
+        "title": title_clean,
+        "message": f"Added {company_clean} — {title_clean}. Scoring in the background.",
+        "view_url": f"{request.base_url.scheme}://{request.url.netloc}{prefix}/jobs/{job_id}",
+    })
+
+
 ALLOWED_AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".aiff", ".flac", ".webm", ".mp4"}
 
 
@@ -1409,12 +1634,69 @@ async def coaching_upload(
         )
         interview_id = cur.lastrowid
         conn.commit()
-    threading.Thread(
-        target=process_audio.process_interview,
-        args=(interview_id,),
-        daemon=True,
-    ).start()
+    process_audio.enqueue("interview", interview_id)
     return RedirectResponse(url=_rp(f"/coaching/interview/{interview_id}"), status_code=303)
+
+
+@app.post("/coaching/ingest")
+async def coaching_ingest(request: Request):
+    """Token-protected interview-audio ingest for the iOS Shortcut share sheet.
+    Multipart: token + file (audio) + optional description. The audio's filename
+    is used as the description (company/date/round auto-filled from it), then we
+    transcribe + analyze in the background. Auth by INGEST_TOKEN, not session."""
+    expected = (os.environ.get("INGEST_TOKEN") or "").strip()
+    form = await request.form()
+    token = (form.get("token") or request.query_params.get("token") or "").strip()
+    if not expected or token != expected:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "filename"):
+        return JSONResponse({"ok": False, "error": "no audio file"}, status_code=400)
+
+    # Description = explicit field if sent, else the audio's filename (no ext).
+    description = (form.get("description") or "").strip()
+    if not description and upload.filename:
+        from pathlib import Path as _Path
+        description = _Path(upload.filename).stem.replace("_", " ").strip()
+
+    try:
+        name = _save_uploaded_audio(upload)
+    except HTTPException as e:
+        return JSONResponse({"ok": False, "error": str(e.detail)}, status_code=400)
+
+    company = interview_date = round_ = ""
+    if description:
+        from . import interview_parse  # noqa: E402
+        try:
+            meta = interview_parse.parse(description)
+            company = (meta.get("company") or "").strip()
+            interview_date = (meta.get("interview_date") or "").strip()
+            round_ = (meta.get("round") or "").strip()
+        except Exception as e:
+            print(f"  coaching ingest parse failed: {e}")
+
+    with db.connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO interviews (round, company, interview_date, occurred_at, audio_path) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)",
+            (round_ or None, company or None,
+             _normalize_interview_date(interview_date), name),
+        )
+        interview_id = cur.lastrowid
+        conn.commit()
+    process_audio.enqueue("interview", interview_id)
+
+    label = " - ".join(x for x in (company, round_, interview_date) if x) or "Interview"
+    prefix = request.scope.get("root_path", "")
+    return JSONResponse({
+        "ok": True,
+        "interview_id": interview_id,
+        "company": company, "date": interview_date, "round": round_,
+        "description_used": description,
+        "message": f"Got it: {label}. Transcribing and analyzing in the background. You'll get a Telegram ping when it's done.",
+        "view_url": f"{request.base_url.scheme}://{request.url.netloc}{prefix}/coaching/interview/{interview_id}",
+    })
 
 
 @app.post("/coaching/paste")
@@ -1439,11 +1721,7 @@ def coaching_paste(
         )
         interview_id = cur.lastrowid
         conn.commit()
-    threading.Thread(
-        target=process_audio.process_interview,
-        args=(interview_id,),
-        daemon=True,
-    ).start()
+    process_audio.enqueue("interview", interview_id)
     return RedirectResponse(url=_rp(f"/coaching/interview/{interview_id}"), status_code=303)
 
 
@@ -1467,11 +1745,7 @@ def practice_paste(
         )
         session_id = cur.lastrowid
         conn.commit()
-    threading.Thread(
-        target=process_audio.process_practice,
-        args=(session_id,),
-        daemon=True,
-    ).start()
+    process_audio.enqueue("practice", session_id)
     return RedirectResponse(url=_rp(f"/coaching/practice/{session_id}"), status_code=303)
 
 
@@ -1817,9 +2091,10 @@ def practice_question_detail(request: Request, question_id: int):
     if q.get("core_id"):
         return RedirectResponse(url=_rp(f"/practice/{q['core_id']}"), status_code=303)
     sessions = practice.list_sessions(question_id=question_id)
+    asked_in = practice.interview_asks_for_core(question_id)
     return templates.TemplateResponse(
         "practice_question.html",
-        {"request": request, "question": q, "sessions": sessions},
+        {"request": request, "question": q, "sessions": sessions, "asked_in": asked_in},
     )
 
 
@@ -1835,14 +2110,60 @@ async def practice_record(
         raise HTTPException(status_code=404)
     name = _save_uploaded_audio(file)
     session_id = practice.create_session(question_id, name)
-    threading.Thread(
-        target=process_audio.process_practice,
-        args=(session_id,),
-        daemon=True,
-    ).start()
+    process_audio.enqueue("practice", session_id)
     return RedirectResponse(
-        url=f"/coaching/practice/{session_id}", status_code=303
+        url=_rp(f"/coaching/practice/{session_id}"), status_code=303
     )
+
+
+@app.post("/practice/{question_id}/standard-answer")
+def practice_save_standard_answer(
+    request: Request,
+    question_id: int,
+    standard_answer: str = Form(""),
+):
+    if (r := auth.require_login(request)) is not None:
+        return r
+    if practice.get_question(question_id) is None:
+        raise HTTPException(status_code=404)
+    practice.set_standard_answer(question_id, standard_answer)
+    return RedirectResponse(url=_rp(f"/practice/{question_id}"), status_code=303)
+
+
+@app.post("/practice/{question_id}/standard-answer/generate")
+def practice_generate_standard_answer(request: Request, question_id: int):
+    if (r := auth.require_login(request)) is not None:
+        return r
+    q = practice.get_question(question_id)
+    if q is None:
+        raise HTTPException(status_code=404)
+    try:
+        answer = answer_gen.generate_answer(q["question"])
+    except Exception as e:
+        print(f"  answer generation failed: {e}")
+        return RedirectResponse(url=_rp(f"/practice/{question_id}?gen=error"), status_code=303)
+    if answer:
+        practice.set_standard_answer(question_id, answer)
+    return RedirectResponse(url=_rp(f"/practice/{question_id}"), status_code=303)
+
+
+@app.post("/practice/{question_id}/keywords/generate")
+def practice_generate_keywords(request: Request, question_id: int):
+    if (r := auth.require_login(request)) is not None:
+        return r
+    q = practice.get_question(question_id)
+    if q is None:
+        raise HTTPException(status_code=404)
+    answer = (q.get("standard_answer") or "").strip()
+    if not answer:
+        return RedirectResponse(url=_rp(f"/practice/{question_id}?kw=noanswer"), status_code=303)
+    try:
+        kws = answer_gen.generate_keywords(answer)
+    except Exception as e:
+        print(f"  keyword generation failed: {e}")
+        return RedirectResponse(url=_rp(f"/practice/{question_id}?kw=error"), status_code=303)
+    practice.set_keywords(question_id, "\n".join(kws))
+    return RedirectResponse(url=_rp(f"/practice/{question_id}"), status_code=303)
 
 
 @app.get("/health", response_class=HTMLResponse)
@@ -1853,7 +2174,35 @@ def health_view(request: Request):
     overall = "ok" if all(c.status == "ok" for c in checks) else (
         "fail" if any(c.status == "fail" for c in checks) else "warn"
     )
+    with db.connect() as conn:
+        daily = [dict(r) for r in conn.execute(
+            "SELECT date(ran_at) AS d, "
+            "SUM(CASE WHEN source='discovery' THEN new_jobs ELSE 0 END) AS disc_new, "
+            "SUM(CASE WHEN source='discovery' THEN new_passed ELSE 0 END) AS disc_passed, "
+            "SUM(CASE WHEN source='serpapi' THEN new_jobs ELSE 0 END) AS serp_new, "
+            "SUM(CASE WHEN source='serpapi' THEN new_passed ELSE 0 END) AS serp_passed "
+            "FROM discovery_runs GROUP BY d ORDER BY d DESC LIMIT 21"
+        ).fetchall()]
+        for _r in daily:
+            try:
+                _r["dow"] = datetime.strptime(_r["d"], "%Y-%m-%d").strftime("%a")
+            except (ValueError, TypeError):
+                _r["dow"] = ""
+        wd_rows = conn.execute(
+            "SELECT strftime('%w', ran_at) AS wd, SUM(new_passed) AS tp, "
+            "COUNT(DISTINCT date(ran_at)) AS days FROM discovery_runs GROUP BY wd"
+        ).fetchall()
+    _names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    _order = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+    weekday = []
+    for r in wd_rows:
+        days = r["days"] or 1
+        weekday.append({"name": _names[int(r["wd"])],
+                        "avg_passed": round((r["tp"] or 0) / days, 1),
+                        "total_passed": r["tp"] or 0})
+    weekday.sort(key=lambda x: _order[x["name"]])
     return templates.TemplateResponse(
         "health.html",
-        {"request": request, "checks": checks, "overall": overall},
+        {"request": request, "checks": checks, "overall": overall,
+         "daily": daily, "weekday": weekday},
     )

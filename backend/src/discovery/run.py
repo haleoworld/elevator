@@ -23,7 +23,7 @@ load_dotenv(REPO_ROOT / ".env")
 
 import os  # noqa: E402
 
-from .. import batches, content, filter as rules_filter, notifier, screen  # noqa: E402
+from .. import batches, content, db, filter as rules_filter, notifier, screen  # noqa: E402
 from . import adzuna, ashby, greenhouse, lever, persist, smartrecruiters, workday  # noqa: E402
 
 
@@ -33,6 +33,10 @@ def main() -> int:
     ap.add_argument("--no-screen", action="store_true", help="skip the Phase 3 LLM screen stage")
     ap.add_argument("--filter-only", action="store_true", help="skip pulls; just (re-)filter")
     ap.add_argument("--screen-only", action="store_true", help="skip pulls + filter; just (re-)screen")
+    ap.add_argument("--prune-expired", action="store_true",
+                    help="drop active jobs whose posting was removed from the board")
+    ap.add_argument("--record-run", action="store_true",
+                    help="log this run's new-found / new-passed counts to the activity history")
     ap.add_argument("--screen-limit", type=int, default=None,
                     help="cap how many jobs the LLM screens (useful for cost-controlled tests)")
     ap.add_argument("--batch-now", action="store_true",
@@ -44,6 +48,7 @@ def main() -> int:
     do_pull = not (args.filter_only or args.screen_only)
     do_filter = not (args.no_filter or args.screen_only)
     do_screen = not args.no_screen
+    ins = 0
 
     if do_pull:
         t0 = time.time()
@@ -77,6 +82,16 @@ def main() -> int:
         print(f"           checked={stats['checked']}  passed={stats['passed']}  dropped={stats['dropped']}")
         for reason, n in sorted(stats["by_reason"].items(), key=lambda x: -x[1])[:8]:
             print(f"             {n:4d}  {reason}")
+
+    if args.record_run and do_filter:
+        db.record_run("discovery", new_jobs=ins, new_passed=filter_passed or 0)
+        print(f"[record]   discovery run logged (new={ins}, passed={filter_passed or 0})")
+
+    if args.prune_expired:
+        print("[prune]    checking postings still exist on the board")
+        from .. import expire
+        pstats = expire.prune()
+        print(f"           checked={pstats['checked']}  expired/dropped={pstats['expired']}")
 
     if do_screen:
         print("[screen]   Haiku JD screen + resume alignment")

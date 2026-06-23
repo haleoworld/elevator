@@ -92,6 +92,7 @@ COACHING_TOOL = {
 def _system_prompt() -> list[dict]:
     bodies = profile_store.read_all()
     life_pattern = bodies.get("Life-Pattern Awareness", "").strip()
+    tone = bodies.get("Tone Samples", "").strip()
     text = (
         "You are an interview coach for the candidate, a senior frontend / full-stack software "
         "engineer with 10+ years of experience. You give specific, actionable feedback "
@@ -101,6 +102,16 @@ def _system_prompt() -> list[dict]:
         f"CANDIDATE'S CAREER BIO (so you know what good answers should reference):\n"
         f"{bodies.get('Career Bio', '').strip()}\n\n"
     )
+    if tone:
+        text += (
+            f"CANDIDATE'S TARGET TONE AND VOICE (how he wants to come across):\n{tone}\n\n"
+            "Coach against this tone. In particular, flag authority-level mismatches in BOTH "
+            "directions: hedging or under-selling that makes him sound junior, AND inflation "
+            "that makes him sound like a principal, staff, lead, or engineering manager rather "
+            "than the experienced senior IC he is. Call out borrowed-authority phrasing (e.g. "
+            "'I led the team', 'I directed', 'I owned the org') and suggest concrete IC ownership "
+            "verbs instead (drove, proposed, unblocked, owned the decision).\n\n"
+        )
     if life_pattern:
         text += (
             f"CANDIDATE'S LIFE-PATTERN AWARENESS (private — informs coaching only, never reference externally):\n"

@@ -23,7 +23,7 @@
         <li class="core-item">
             <a class="core-link" href="{{ root_path }}/practice/{{ q.id }}">
                 <span class="core-q">{{ q.question }}</span>
-                <span class="core-meta">{{ q.attempt_count or 0 }} attempt{{ '' if q.attempt_count == 1 else 's' }}{% if q.last_attempt %} · last {{ q.last_attempt[:10] }}{% endif %}</span>
+                <span class="core-meta">{{ q.attempt_count or 0 }} attempt{{ '' if q.attempt_count == 1 else 's' }}{% if q.last_attempt %} · last {{ q.last_attempt[:10] }}{% endif %}{% if q.asked_count %} · <strong class="asked-badge">asked {{ q.asked_count }}× in interviews</strong>{% endif %}</span>
             </a>
             {% if q.variants %}
             <details class="variant-box">

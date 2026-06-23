@@ -25,4 +25,45 @@
 </table></div>
 
 <p class="muted small">Phase 1 only checks env, profile.md, the SQLite schema, and the data directories. Phase 5 will add cron, Whisper model, Telegram bot, and backup checks.</p>
+
+<section class="section" style="margin-top: 22px;">
+    <div class="sectionhead"><h2>Discovery activity</h2></div>
+    <p class="blurb">New jobs each auto run logs (2 AM discovery + 2:30 AM SerpAPI). "Found" = brand-new postings; "Passed" = those that cleared your filters. Use this to spot which days new jobs actually land.</p>
+
+    {% if weekday %}
+    <h3 class="content-h3" style="margin-top:6px;">By day of week (avg new passed / run)</h3>
+    <div class="table-scroll"><table class="healthtable">
+        <thead><tr>{% for w in weekday %}<th>{{ w.name }}</th>{% endfor %}</tr></thead>
+        <tbody><tr>
+            {% for w in weekday %}
+            <td><strong class="asked-badge">{{ w.avg_passed }}</strong><br><span class="muted small">{{ w.total_passed }} total</span></td>
+            {% endfor %}
+        </tr></tbody>
+    </table></div>
+    {% endif %}
+
+    <h3 class="content-h3" style="margin-top:14px;">Recent days</h3>
+    {% if daily %}
+    <div class="table-scroll"><table class="healthtable jobs-table">
+        <thead><tr>
+            <th>Date</th>
+            <th>Discovery<br><span class="muted small">found / passed</span></th>
+            <th>SerpAPI<br><span class="muted small">found / passed</span></th>
+            <th>Total passed</th>
+        </tr></thead>
+        <tbody>
+        {% for d in daily %}
+        <tr>
+            <td>{{ d.d }} <span class="muted small">{{ d.dow }}</span></td>
+            <td>{{ d.disc_new }} / {{ d.disc_passed }}</td>
+            <td>{{ d.serp_new }} / {{ d.serp_passed }}</td>
+            <td><strong>{{ d.disc_passed + d.serp_passed }}</strong></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    {% else %}
+    <p class="muted">No runs logged yet — the first 2 AM discovery and 2:30 AM SerpAPI runs will populate this.</p>
+    {% endif %}
+</section>
 {% endblock %}

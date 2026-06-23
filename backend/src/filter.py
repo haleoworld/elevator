@@ -31,7 +31,7 @@ _LEVEL_DROP_RE = re.compile(
     r"\b("
     r"intern|internship|junior|jr|associate|entry[- ]level|co[- ]?op|"
     r"manager|director|vp|head[- ]of|chief|founder|recruiter|"
-    r"principal|architect|"
+    r"principal|architect|staff|lead|intermediate|"
     r"sales|account executive|account manager|account development|account representative|customer success|"
     r"analyst|research scientist|"
     r"solutions engineer|solutions architect|sales engineer|pre[- ]?sales|"
@@ -117,7 +117,7 @@ _CANADA_HINT_RE = re.compile(
 # Avoids state abbreviations (would conflict with CA=California vs Canada).
 _US_INDICATOR_RE = re.compile(
     r"\b(united states|usa|u\.s\.a\.?|u\.s\.|"
-    r"new york city|nyc|san francisco|los angeles|seattle|austin|"
+    r"new york city|nyc|la|san francisco|los angeles|seattle|austin|"
     r"boston|chicago|denver|atlanta|miami|portland|dallas|houston|"
     r"phoenix|san diego|san jose|"
     r"california|texas|florida|illinois|massachusetts|virginia|"
@@ -192,16 +192,57 @@ def _too_old(posted_at) -> bool:
     return (datetime.now() - posted_at) > timedelta(days=_MAX_AGE_DAYS)
 
 
-def evaluate(job: dict, curated: dict[str, str], excluded: set[str]) -> tuple[bool, str | None]:
+def location_disqualified(location: str | None) -> str | None:
+    """Return a drop reason if `location` is clearly outside Canada-compatible
+    scope, else None. Shared by the Phase-2 filter and the Workday lazy-resolve
+    in screening (where the real city only appears after the detail fetch — the
+    list view shows an unhelpful 'N Locations' placeholder)."""
+    if not location:
+        return None
+    if _LOCATION_DROP_RE.search(location):
+        return f"location outside NA: {location[:60]}"
+    if _US_INDICATOR_RE.search(location) and not _CANADA_HINT_RE.search(location):
+        return f"location: US-only (no Canada signal): {location[:60]}"
+    return None
+
+
+# Recruiting / staffing agencies — they repost client roles, not their own
+# openings. Mostly relevant to broad (SerpAPI) discovery; harmless for the
+# curated pipeline since none of the curated companies are agencies.
+_RECRUITING_AGENCY_RE = re.compile(
+    r"\b("
+    r"randstad|robert half|roberthalf|hays|adecco|aerotek|teksystems|tek systems|"
+    r"kforce|insight global|motion recruitment|beacon hill|apex systems|"
+    r"collabera|procom|experis|manpower|kelly services|akkodis|modis|"
+    r"targeted talent|lancesoft|cybercoders|teema|ian martin|russell tobin|"
+    r"j&m group|j & m group|j and m group|"
+    r"staffing|recruiting|recruitment|talent solutions|executive search|"
+    r"search partners|search group"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def evaluate(job: dict, curated: dict[str, str], excluded: set[str],
+             *, require_curated: bool = True) -> tuple[bool, str | None]:
     """Returns (passes, drop_reason). drop_reason is None when passes=True."""
     title = job.get("title") or ""
     company_norm = _normalize_company(job.get("company") or "")
     location = job.get("location") or ""
+    # Workday multi-location postings list an "N Locations" placeholder the gate
+    # can't read; the URL path encodes the primary city, so resolve it (free, no
+    # network) before the location checks below.
+    if (not location.strip() or re.match(r"^\d+\s+Locations?$", location.strip(), re.IGNORECASE)) \
+            and "myworkdayjobs.com" in (job.get("url") or ""):
+        from .discovery.workday import _location_from_url
+        location = _location_from_url(job["url"]) or location
 
     # Company checks first — cheapest drop, biggest bucket.
     if company_norm in excluded:
         return False, "company in excluded list"
-    if company_norm not in curated:
+    if _RECRUITING_AGENCY_RE.search(job.get("company") or ""):
+        return False, "recruiting/staffing agency"
+    if require_curated and company_norm not in curated:
         return False, "company not in curated list"
     if _LEVEL_DROP_RE.search(title):
         return False, "title level/function mismatch"
@@ -209,10 +250,11 @@ def evaluate(job: dict, curated: dict[str, str], excluded: set[str]) -> tuple[bo
         return False, "non-FE engineering specialty"
     if not _TITLE_REQUIRE_RE.search(title):
         return False, "title lacks engineering signal"
-    if location and _LOCATION_DROP_RE.search(location):
-        return False, f"location outside NA: {location[:60]}"
-    if location and _US_INDICATOR_RE.search(location) and not _CANADA_HINT_RE.search(location):
-        return False, f"location: US-only (no Canada signal): {location[:60]}"
+    # Check the title too — Google Jobs often mislabels a US/foreign job's
+    # location as the searched region (e.g. "Frontend Dev - LA Onsite" tagged
+    # "Ontario"), but the real city leaks into the title.
+    if (loc_reason := location_disqualified(location) or location_disqualified(title)):
+        return False, loc_reason
     if _too_old(job.get("posted_at")):
         return False, f"posted >{_MAX_AGE_DAYS}d ago"
     return True, None

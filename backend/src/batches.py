@@ -62,6 +62,40 @@ def form_batch(
         return batch_id
 
 
+def move_jobs(job_ids: list[int], target_batch_id: int) -> int:
+    """Move already-batched jobs into target_batch_id. Reassigns each job's
+    batch_jobs link (a job lives in exactly one batch) and resyncs counts on
+    every batch. Returns the number actually moved."""
+    if not job_ids:
+        return 0
+    with db.connect() as conn:
+        if conn.execute("SELECT 1 FROM batches WHERE id = ?", (target_batch_id,)).fetchone() is None:
+            return 0
+        ph = ",".join("?" * len(job_ids))
+        valid = [r["id"] for r in conn.execute(
+            f"SELECT id FROM jobs WHERE id IN ({ph}) AND deleted_at IS NULL", job_ids
+        ).fetchall()]
+        if not valid:
+            return 0
+        vph = ",".join("?" * len(valid))
+        conn.execute(f"DELETE FROM batch_jobs WHERE job_id IN ({vph})", valid)
+        for jid in valid:
+            conn.execute(
+                "INSERT OR IGNORE INTO batch_jobs (batch_id, job_id) VALUES (?, ?)",
+                (target_batch_id, jid),
+            )
+            conn.execute("UPDATE jobs SET stage = 'queued' WHERE id = ?", (jid,))
+        # Resync stored job_count on every batch from the link table (counting
+        # only live jobs), so both source and destination stay accurate.
+        conn.execute(
+            "UPDATE batches SET job_count = "
+            "  (SELECT COUNT(*) FROM batch_jobs bj JOIN jobs j ON j.id = bj.job_id "
+            "   WHERE bj.batch_id = batches.id AND j.deleted_at IS NULL)"
+        )
+        conn.commit()
+        return len(valid)
+
+
 def scored_unbatched() -> list[dict]:
     """Scored jobs not yet in any batch — candidates for hand-picking."""
     with db.connect() as conn:
@@ -121,8 +155,10 @@ def add_jobs_to_batch(batch_id: int, job_ids: list[int]) -> int:
 def list_batches() -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute(
-            "SELECT id, name, triggered_at, trigger_reason, job_count, notified_at, status "
-            "FROM batches ORDER BY triggered_at DESC"
+            "SELECT b.id, b.name, b.triggered_at, b.trigger_reason, b.notified_at, b.status, "
+            "  (SELECT COUNT(*) FROM batch_jobs bj JOIN jobs j ON j.id = bj.job_id "
+            "   WHERE bj.batch_id = b.id AND j.deleted_at IS NULL) AS job_count "
+            "FROM batches b ORDER BY b.triggered_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -143,7 +179,7 @@ def get_batch(batch_id: int) -> dict | None:
             "FROM batch_jobs bj "
             "JOIN jobs j ON j.id = bj.job_id "
             "LEFT JOIN applications a ON a.job_id = j.id "
-            "WHERE bj.batch_id = ? "
+            "WHERE bj.batch_id = ? AND j.deleted_at IS NULL "
             "ORDER BY j.fit_score DESC",
             (batch_id,),
         ).fetchall()
