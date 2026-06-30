@@ -241,10 +241,17 @@
                 <option value="no"  {% if q_fe == 'no'  %}selected{% endif %}>Non-FE only</option>
             </select>
         </label>
+        <label style="flex: 1 1 130px;">Re-host
+            <select name="q_rehost">
+                <option value=""     {% if q_rehost == ''     %}selected{% endif %}>— any —</option>
+                <option value="only" {% if q_rehost == 'only' %}selected{% endif %}>Re-host only</option>
+                <option value="hide" {% if q_rehost == 'hide' %}selected{% endif %}>Hide re-host</option>
+            </select>
+        </label>
     </div>
     <div class="actions" style="margin-top: 10px;">
         <button type="submit">Filter</button>
-        {% if q_company or q_reason or q_fit or q_role or q_co or q_fe_pct or q_min_ats or q_fe or q_location or q_batch %}
+        {% if q_company or q_reason or q_fit or q_role or q_co or q_fe_pct or q_min_ats or q_fe or q_location or q_batch or q_rehost %}
         <a href="{{ root_path }}/jobs?tab={{ tab }}" class="secondary-btn" style="margin-left: 8px;">Clear</a>
         {% endif %}
     </div>
@@ -277,13 +284,13 @@
     {% if show_batch %}<td>{% if j.batch_id %}<a href="{{ root_path }}/batches/{{ j.batch_id }}" onclick="event.stopPropagation()">{{ j.batch_name or ("#" ~ j.batch_id) }}</a>{% else %}—{% endif %}</td>{% endif %}
     <td class="detail">{% if j.posted_at %}{{ j.posted_at|string|truncate(10, true, '') }}{% else %}—{% endif %}</td>
     <td class="detail">{% if j.discovered_at %}{{ j.discovered_at|string|truncate(10, true, '') }}{% else %}—{% endif %}</td>
-    <td>{{ j.job_board or "—" }}</td>
+    <td>{{ j.job_board or "—" }}{% if j.is_rehost %} <span class="badge status-warn" title="Re-host / re-poster source — verify the real employer before applying">re-host</span>{% endif %}</td>
     <td><span class="intake-chip intake-{{ j.intake|lower }}">{{ j.intake }}</span></td>
     {% if extra_cell is not none %}<td>{{ extra_cell }}</td>{% endif %}
 </tr>
 {% endmacro %}
 
-{% set has_filter = q_company or q_reason or q_fit or q_role or q_co or q_fe_pct or q_min_ats or q_fe or q_location or q_batch %}
+{% set has_filter = q_company or q_reason or q_fit or q_role or q_co or q_fe_pct or q_min_ats or q_fe or q_location or q_batch or q_rehost %}
 
 {% macro action_buttons(tab, kind) %}
 {# Each button carries its OWN confirm via onclick. The parent <form> must NOT

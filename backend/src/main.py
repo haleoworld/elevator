@@ -769,11 +769,14 @@ def jobs_view(request: Request, tab: str = "scored",
               q_co: list[str] = Query(default=[]),
               q_fe_pct: list[str] = Query(default=[]),
               q_min_ats: str = "", q_fe: str = "", q_location: str = "",
-              q_batch: str = ""):
+              q_batch: str = "", q_rehost: str = ""):
     if (r := auth.require_login(request)) is not None:
         return r
     if tab not in ("scored", "passed", "dropped", "batched", "deleted"):
         tab = "scored"
+
+    # Re-host tagging list (jobs page display only; NOT a discovery drop-list).
+    from .filter import is_rehost as _is_rehost, REHOST_DOMAINS
 
     purged_n = db.purge_old_deleted_jobs(days=5)
 
@@ -819,12 +822,17 @@ def jobs_view(request: Request, tab: str = "scored",
             if q_batch.isdigit():
                 q += "AND id IN (SELECT job_id FROM batch_jobs WHERE batch_id = ?) "
                 params.append(int(q_batch))
+            if q_rehost in ("only", "hide"):
+                likes = " OR ".join("url LIKE ?" for _ in REHOST_DOMAINS)
+                params.extend(f"%{d}%" for d in REHOST_DOMAINS)
+                q += (f"AND ({likes}) " if q_rehost == "only"
+                      else f"AND NOT ({likes}) ")
             return q
 
         SELECT_COLS = (
             "id, company, title, location, fit_score, ats_score, "
             "filter_status, drop_reason, deleted_at, jd_text, "
-            "posted_at, discovered_at, job_board, stage, source, "
+            "posted_at, discovered_at, job_board, stage, source, url, "
             "(SELECT bj.batch_id FROM batch_jobs bj WHERE bj.job_id = jobs.id LIMIT 1) AS batch_id, "
             "(SELECT b.name FROM batch_jobs bj JOIN batches b ON b.id = bj.batch_id "
             " WHERE bj.job_id = jobs.id LIMIT 1) AS batch_name, "
@@ -881,6 +889,7 @@ def jobs_view(request: Request, tab: str = "scored",
         for d in rows:
             d["score_class"] = _score_class(d.get("fit_score") or 0)
             d["intake"] = _intake_label(d.get("source"))
+            d["is_rehost"] = _is_rehost(d.get("url"))
             # Role fit = avg(tech_stack, fe_be_breakdown, requirements, role_expectations)
             d["role_fit"] = _avg(d.get("p_tech"), d.get("p_febr"),
                                   d.get("p_req"),  d.get("p_role"))
@@ -942,6 +951,7 @@ def jobs_view(request: Request, tab: str = "scored",
             "q_fe": q_fe,
             "q_location": q_location,
             "q_batch": q_batch,
+            "q_rehost": q_rehost,
             "purged_n": purged_n,
             "discovery_status": _discovery_status(),
             "screen_status": _screen_status(),

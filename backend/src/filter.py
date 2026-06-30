@@ -223,6 +223,24 @@ _RECRUITING_AGENCY_RE = re.compile(
 )
 
 
+# Re-host / re-poster domains: third-party sites (resume tools, personal pages,
+# small aggregators) that re-list jobs scraped from elsewhere. Unlike the SerpAPI
+# _AGGREGATORS drop-list, these are NOT dropped at discovery — a re-host now and
+# then surfaces a legit direct-employer role (e.g. NEOGOV via davidneevel.com).
+# Instead the jobs page TAGS them so they can be reviewed in one batch.
+REHOST_DOMAINS = (
+    "cvcraft.roynex.com", "roynex.com", "davidneevel.com",
+    "thecareerwallet.com", "careerwallet.com", "sercanto",
+    "jobspider", "jobzmall",
+)
+
+
+def is_rehost(url: str | None) -> bool:
+    """True if this job's apply URL is a known re-host / re-poster domain."""
+    u = (url or "").lower()
+    return any(d in u for d in REHOST_DOMAINS)
+
+
 def evaluate(job: dict, curated: dict[str, str], excluded: set[str],
              *, require_curated: bool = True) -> tuple[bool, str | None]:
     """Returns (passes, drop_reason). drop_reason is None when passes=True."""
