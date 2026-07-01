@@ -2157,6 +2157,24 @@ def practice_generate_standard_answer(request: Request, question_id: int):
     return RedirectResponse(url=_rp(f"/practice/{question_id}"), status_code=303)
 
 
+@app.post("/practice/{question_id}/keywords")
+def practice_save_keywords(
+    request: Request,
+    question_id: int,
+    keywords: str = Form(""),
+):
+    if (r := auth.require_login(request)) is not None:
+        return r
+    if practice.get_question(question_id) is None:
+        raise HTTPException(status_code=404)
+    # Normalise: one keyword per line, drop blanks, preserve order.
+    cleaned = "\n".join(
+        line.strip() for line in keywords.splitlines() if line.strip()
+    )
+    practice.set_keywords(question_id, cleaned)
+    return RedirectResponse(url=_rp(f"/practice/{question_id}"), status_code=303)
+
+
 @app.post("/practice/{question_id}/keywords/generate")
 def practice_generate_keywords(request: Request, question_id: int):
     if (r := auth.require_login(request)) is not None:

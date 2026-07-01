@@ -137,22 +137,21 @@
 
     <section class="section">
         <div class="sectionhead"><h2>Keywords</h2></div>
-        <p class="blurb">Short triggers distilled from your standard answer — for rehearsing on the go. Generate them, then flip through the flash cards.</p>
-        {% if keyword_list %}
-        <ul class="keyword-chips">
-            {% for k in keyword_list %}<li class="keyword-chip">{{ k }}</li>{% endfor %}
-        </ul>
-        {% else %}
-        <p class="muted">No keywords yet. Save a standard answer above, then generate keywords from it.</p>
-        {% endif %}
-        <div class="actions">
-            <form method="post" action="{{ root_path }}/practice/{{ question.id }}/keywords/generate" style="display:inline;">
-                <button type="submit" class="secondary-btn">{{ icon('sparkles') }} Generate keywords</button>
-            </form>
-            {% if keyword_list %}
-            <button type="button" class="secondary-btn" onclick="openFlashcards()">Show keyword flash cards</button>
-            {% endif %}
-        </div>
+        <p class="blurb">Short triggers distilled from your standard answer — for rehearsing on the go. Add, edit, remove or reorder them, then flip through the flash cards.</p>
+        <form id="kw-form" method="post" action="{{ root_path }}/practice/{{ question.id }}/keywords">
+            <input type="hidden" name="keywords" id="kw-hidden">
+            <ul id="kw-editor" class="keyword-editor"></ul>
+            <p class="muted" id="kw-empty" hidden>No keywords yet. Add one below, or generate them from your standard answer.</p>
+            <div class="kw-add">
+                <input type="text" id="kw-new" placeholder="Add a keyword…" autocomplete="off">
+                <button type="button" class="secondary-btn" onclick="kwAdd()">Add</button>
+            </div>
+            <div class="actions">
+                <button type="submit">Save keywords</button>
+                <button type="submit" class="secondary-btn" formaction="{{ root_path }}/practice/{{ question.id }}/keywords/generate" formnovalidate>{{ icon('sparkles') }} Generate from answer</button>
+                <button type="button" class="secondary-btn" onclick="openFlashcards()">Show keyword flash cards</button>
+            </div>
+        </form>
     </section>
 </div>
 
@@ -255,6 +254,100 @@
         if (Math.abs(dx) > 40) { if (dx < 0) fcNext(); else fcPrev(); }
         startX = null;
     }, {passive: true});
+})();
+</script>
+
+<script>
+(function () {
+    // Editable / removable / drag-reorderable keyword chips. The DOM is the
+    // source of truth (order = node order), so drag just moves nodes around.
+    const editor = document.getElementById('kw-editor');
+    const emptyMsg = document.getElementById('kw-empty');
+    const form = document.getElementById('kw-form');
+    const newInput = document.getElementById('kw-new');
+
+    function updateEmpty() { emptyMsg.hidden = editor.children.length > 0; }
+
+    // Pointer-based drag reorder via the grip handle — works on touch + mouse.
+    function attachDrag(handle, li) {
+        handle.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            li.classList.add('dragging');
+            handle.setPointerCapture(e.pointerId);
+
+            const onMove = (ev) => {
+                const y = ev.clientY;
+                const others = [...editor.querySelectorAll('.keyword-edit-row:not(.dragging)')];
+                let before = null;
+                for (const r of others) {
+                    const box = r.getBoundingClientRect();
+                    if (y < box.top + box.height / 2) { before = r; break; }
+                }
+                if (before) editor.insertBefore(li, before);
+                else editor.appendChild(li);
+            };
+            const onUp = () => {
+                li.classList.remove('dragging');
+                try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+                handle.removeEventListener('pointermove', onMove);
+                handle.removeEventListener('pointerup', onUp);
+                handle.removeEventListener('pointercancel', onUp);
+            };
+            handle.addEventListener('pointermove', onMove);
+            handle.addEventListener('pointerup', onUp);
+            handle.addEventListener('pointercancel', onUp);
+        });
+    }
+
+    function makeRow(value) {
+        const li = document.createElement('li');
+        li.className = 'keyword-edit-row';
+
+        const handle = document.createElement('span');
+        handle.className = 'kw-handle';
+        handle.textContent = '⠿';
+        handle.setAttribute('aria-label', 'Drag to reorder');
+
+        const txt = document.createElement('input');
+        txt.type = 'text';
+        txt.className = 'kw-text';
+        txt.value = value;
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'kw-iconbtn kw-del';
+        del.textContent = '×';
+        del.setAttribute('aria-label', 'Remove keyword');
+        del.addEventListener('click', () => { li.remove(); updateEmpty(); });
+
+        attachDrag(handle, li);
+        li.append(handle, txt, del);
+        return li;
+    }
+
+    window.kwAdd = function () {
+        const v = newInput.value.trim();
+        if (!v) return;
+        editor.appendChild(makeRow(v));
+        newInput.value = '';
+        updateEmpty();
+        newInput.focus();
+    };
+
+    // Enter in the add box adds a keyword instead of submitting the form.
+    newInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); window.kwAdd(); }
+    });
+
+    // On Save, read keywords in current DOM order (trim + drop blanks).
+    form.addEventListener('submit', () => {
+        const vals = [...editor.querySelectorAll('.kw-text')]
+            .map((i) => i.value.trim()).filter(Boolean);
+        document.getElementById('kw-hidden').value = vals.join('\n');
+    });
+
+    ({{ keyword_list | tojson }}).forEach((v) => editor.appendChild(makeRow(v)));
+    updateEmpty();
 })();
 </script>
 
